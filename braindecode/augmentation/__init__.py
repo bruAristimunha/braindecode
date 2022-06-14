@@ -18,6 +18,7 @@ from .transforms import (
     SensorsYRotation,
     SensorsXRotation,
     Mixup,
+    ReReference,
 )
 
 from . import functional
