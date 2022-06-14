@@ -23,6 +23,7 @@ from .functional import sensors_rotation
 from .functional import sign_flip
 from .functional import smooth_time_mask
 from .functional import time_reverse
+from .functional import re_reference
 
 
 class TimeReverse(Transform):
@@ -1094,4 +1095,51 @@ class Mixup(Transform):
         return {
             "lam": lam,
             "idx_perm": idx_perm,
+        }
+
+
+class ReReference(Transform):
+    """ TO-DO: write about the method
+
+    Parameters
+    ----------
+
+    """
+    operation = staticmethod(re_reference)
+
+    def __init__(
+        self,
+        probability,
+        ref_from,
+        random_state=None
+    ):
+        super().__init__(
+            probability=probability,
+            random_state=random_state
+        )
+        self.ref_from = ref_from
+
+    def get_augmentation_params(self, *batch):
+        """Return transform parameters.
+
+        Parameters
+        ----------
+        X : tensor.Tensor
+            The data.
+        y : tensor.Tensor
+            The labels.
+
+        Returns
+        -------
+        params: dict
+            Contains the values sampled uniformly between 0 and 1 setting the
+            linear interpolation between examples (lam) and the shuffled
+            indices of examples that are mixed into original examples
+            (idx_perm).
+        """
+        if len(batch) == 0:
+            return super().get_augmentation_params(*batch)
+
+        return {
+            "ref_from": self.ref_from,
         }
