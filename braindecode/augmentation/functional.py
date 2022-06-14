@@ -995,3 +995,28 @@ def mixup(X, y, lam, idx_perm):
         y_b[idx] = y[idx_perm[idx]]
 
     return X_mix, (y_a, y_b, lam)
+
+def re_reference(X, y, ref_from):
+    """Re-reference method.
+
+    Parameters
+    ----------
+    X : torch.Tensor
+        EEG input example or batch.
+    y : torch.Tensor
+        EEG labels for the example or batch.
+
+    Returns
+    -------
+    torch.Tensor
+        Transformed inputs.
+    torch.Tensor
+        Transformed labels.
+    """
+
+    data = X.copy()
+    ref_data = data[..., ref_from, :].mean(-2, keepdims=True)
+    data[..., None, :] -= ref_data
+    X_new = ref_data[..., 0, :]
+
+    return X_new, y
