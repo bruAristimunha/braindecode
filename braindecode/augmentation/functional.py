@@ -1014,7 +1014,7 @@ def re_reference(X, y, ref_from):
         Transformed labels.
     """
 
-    data = X.copy()
+    data = X.clone()
     ref_data = data[..., ref_from, :].mean(-2, keepdims=True)
     data[..., None, :] -= ref_data
     X_new = ref_data[..., 0, :]
