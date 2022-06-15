@@ -100,13 +100,14 @@ valid_set = splitted['session_E']
 # First, we need to define a Transform. Here we chose the FrequencyShift, which
 # randomly translates all frequencies within a given range.
 
-from braindecode.augmentation import FrequencyShift
+from braindecode.augmentation import ReReference
 
-transform = FrequencyShift(
+transform = ReReference(
     probability=1.,  # defines the probability of actually modifying the input
-    sfreq=sfreq,
-    max_delta_freq=2.  # the frequency shifts are sampled now between -2 and 2 Hz
+    ref_from=1,
+    random_state=96,
 )
+
 
 ######################################################################
 # Manipulating one session and visualizing the transformed data
@@ -122,7 +123,7 @@ epochs = train_set.datasets[0].windows  # original epochs
 X = epochs.get_data()
 # This allows to apply the transform with a fixed shift (10 Hz) for
 # visualization instead of sampling the shift randomly between -2 and 2 Hz
-X_tr, _ = transform.operation(torch.as_tensor(X).float(), None, 10., sfreq)
+X_tr, _ = transform.operation(torch.as_tensor(X).float(), None, 1)
 
 ######################################################################
 # The psd of the transformed session has now been shifted by 10 Hz, as one can
@@ -203,16 +204,11 @@ model = ShallowFBCSPNet(
 
 from braindecode.augmentation import AugmentedDataLoader, SignFlip
 
-freq_shift = FrequencyShift(
-    probability=.5,
-    sfreq=sfreq,
-    max_delta_freq=2.  # the frequency shifts are sampled now between -2 and 2 Hz
-)
 
 sign_flip = SignFlip(probability=.1)
 
 transforms = [
-    freq_shift,
+    transform,
     sign_flip
 ]
 
