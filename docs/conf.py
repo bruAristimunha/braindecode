@@ -224,7 +224,7 @@ html_theme_options = {"collapse_navigation": False,
                       'show_toc_level': 1,
                       'navbar_end': 'version-switcher',
                       'switcher': {
-                              'json_url': 'https://raw.githubusercontent.com/bruAristimunha/braindecode/master/docs/_static/versions.json',
+                              'json_url': 'https://raw.githubusercontent.com/bruAristimunha/braindecode/nicer-docs/docs/_static/versions.json',
                           'version_match': switcher_version_match,
                         }
                       }
