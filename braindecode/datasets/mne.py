@@ -85,7 +85,8 @@ def create_from_mne_raw(
 
 
 def create_from_mne_epochs(list_of_epochs, window_size_samples,
-                           window_stride_samples, drop_last_window):
+                           window_stride_samples, drop_last_window,
+                           description=None, transform=None):
     """Create WindowsDatasets from mne.Epochs
 
     Parameters
@@ -145,7 +146,10 @@ def create_from_mne_epochs(list_of_epochs, window_size_samples,
 
             mne_epochs.drop_bad(reject=None, flat=None)
 
-            windows_ds = WindowsDataset(mne_epochs)
+            windows_ds = WindowsDataset(mne_epochs,
+                                        description=description,
+                                        transform=transform)
+
             list_of_windows_ds.append(windows_ds)
 
     return BaseConcatDataset(list_of_windows_ds)
