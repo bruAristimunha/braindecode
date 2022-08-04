@@ -86,7 +86,7 @@ def create_from_mne_raw(
 
 def create_from_mne_epochs(list_of_epochs, window_size_samples,
                            window_stride_samples, drop_last_window,
-                           description=None, transform=None):
+                           list_of_description=None, transform=None):
     """Create WindowsDatasets from mne.Epochs
 
     Parameters
@@ -113,7 +113,7 @@ def create_from_mne_epochs(list_of_epochs, window_size_samples,
                                window_stride_samples)
 
     list_of_windows_ds = []
-    for epochs in list_of_epochs:
+    for n_epochs, epochs in enumerate(list_of_epochs):
         event_descriptions = epochs.events[:, 2]
         original_trial_starts = epochs.events[:, 0]
         stop = len(epochs.times) - window_size_samples
@@ -147,7 +147,7 @@ def create_from_mne_epochs(list_of_epochs, window_size_samples,
             mne_epochs.drop_bad(reject=None, flat=None)
 
             windows_ds = WindowsDataset(mne_epochs,
-                                        description=description,
+                                        description=list_of_description[n_epochs][trial_i],
                                         transform=transform)
 
             list_of_windows_ds.append(windows_ds)
