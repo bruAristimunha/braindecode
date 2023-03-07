@@ -7,6 +7,8 @@
 import warnings
 
 import numpy as np
+
+from numpy import unique
 from sklearn.metrics import get_scorer
 from skorch.callbacks import EpochTimer, BatchScoring, PrintLog, EpochScoring
 from skorch.classifier import NeuralNet
@@ -327,3 +329,14 @@ class EEGClassifier(NeuralNetClassifier):
             batch_size=self.batch_size,
             num_workers=self.get_iterator(X, training=False).loader.num_workers,
         )
+
+    def check_data(self, X, y):
+        super().check_data(X, y)
+
+        if self.module_.in_chans != X.shape[1]:
+
+            self.set_params(module__in_chans=X.shape[1])
+            self.set_params(module__n_classes=len(unique(y)))
+            self.set_params(module__input_window_samples=X.shape[2])
+
+        self.initialize()
