@@ -333,10 +333,9 @@ class EEGClassifier(NeuralNetClassifier):
     def check_data(self, X, y):
         super().check_data(X, y)
 
-        if self.module_.in_chans != X.shape[1]:
-
-            self.set_params(module__in_chans=X.shape[1])
-            self.set_params(module__n_classes=len(unique(y)))
-            self.set_params(module__input_window_samples=X.shape[2])
+        if self.module_.in_chans != X[0][0].shape[0]:
+            self.set_params(module__in_chans=X[0][0].shape[0],
+                            module__n_classes=len(unique(y)),
+                            module__input_window_samples=X[0][0].shape[1])
 
         self.initialize()
