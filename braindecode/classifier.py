@@ -337,5 +337,4 @@ class EEGClassifier(NeuralNetClassifier):
             self.set_params(module__in_chans=X[0][0].shape[0],
                             module__n_classes=len(unique(y)),
                             module__input_window_samples=X[0][0].shape[1])
-
         self.initialize()
