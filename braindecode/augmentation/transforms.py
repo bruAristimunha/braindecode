@@ -1117,7 +1117,7 @@ class SegmentationReconstruction(Transform):
         Seed to be used to instantiate numpy random number generator instance.
         Used to decide whether or not to transform given the probability
         argument. Defaults to None.
-    num_segments : int, optional
+    n_segments : int, optional
         Number of segments to split the signal into in the temporal range.
         Defaults to 8.
     """

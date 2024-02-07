@@ -987,7 +987,8 @@ def segmentation_reconst(X, y, n_segments=8, random_state=None):
     suppress calibration time in oscillatory activity-based brain–computer
     interfaces. Proceedings of the IEEE, 103(6), 871-890.
     """
-
+    # parse the float to int
+    n_segments = int(n_segments)
     # Assuming 'y' is a tensor of labels, and 'X' is a tensor of data
     n_classes = torch.unique(y).numel()
 
