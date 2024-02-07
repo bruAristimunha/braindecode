@@ -987,6 +987,7 @@ def segmentation_reconstruction(X, y, n_segments=8, random_state=None):
     suppress calibration time in oscillatory activity-based brain–computer
     interfaces. Proceedings of the IEEE, 103(6), 871-890.
     """
+
     # Assuming 'y' is a tensor of labels, and 'X' is a tensor of data
     n_classes = torch.unique(y).numel()
 
@@ -1028,11 +1029,11 @@ def segmentation_reconstruction(X, y, n_segments=8, random_state=None):
         aug_label.append(torch.full((n_samples,), class_index, dtype=y.dtype,
                                     device=y.device))
 
-    # Optionally, concatenate all augmented data and labels into single tensors
+    # Concatenate the augmented data and labels
     aug_data = torch.cat(aug_data, dim=0)
     aug_label = torch.cat(aug_label, dim=0)
 
-    idx_shuffle = torch.randperm(len(aug_data))
+    idx_shuffle = rng.permutation(len(aug_data))
 
     aug_data = aug_data[idx_shuffle]
     aug_label = aug_label[idx_shuffle]
