@@ -17,6 +17,7 @@ from .transforms import (
     SensorsZRotation,
     SensorsYRotation,
     SensorsXRotation,
+    SegmentationReconstruction,
     Mixup,
 )
 
@@ -27,4 +28,5 @@ __all__ = ["Transform", "IdentityTransform", "Compose", "AugmentedDataLoader",
            "ChannelsDropout", "GaussianNoise", "ChannelsSymmetry",
            "SmoothTimeMask", "BandstopFilter", "FrequencyShift",
            "SensorsRotation", "SensorsZRotation", "SensorsYRotation",
-           "SensorsXRotation", "Mixup", "functional"]
+           "SensorsXRotation", "SegmentationReconstruction","Mixup",
+           "functional"]

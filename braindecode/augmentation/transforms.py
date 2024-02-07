@@ -23,7 +23,7 @@ from .functional import sensors_rotation
 from .functional import sign_flip
 from .functional import smooth_time_mask
 from .functional import time_reverse
-
+from .functional import segmentation_reconst
 
 class TimeReverse(Transform):
     """Flip the time axis of each input with a given probability.
@@ -1104,3 +1104,51 @@ class Mixup(Transform):
             "lam": lam,
             "idx_perm": idx_perm,
         }
+
+
+class SegmentationReconstruction(Transform):
+    """Applies a segmentation-reconstruction transform to the input data.
+
+    Parameters
+    ----------
+    probability : float
+        Float setting the probability of applying the operation.
+    random_state: int | numpy.random.Generator, optional
+        Seed to be used to instantiate numpy random number generator instance.
+        Used to decide whether or not to transform given the probability
+        argument. Defaults to None.
+    num_segments : int, optional
+        Number of segments to split the signal into in the temporal range.
+        Defaults to 8.
+    """
+    operation = staticmethod(segmentation_reconst)
+
+    def __init__(
+        self,
+        probability,
+        n_segments=8,
+        random_state=None,
+    ):
+        super().__init__(
+            probability=probability,
+            random_state=random_state,
+        )
+        self.n_segments = n_segments
+
+    def get_augmentation_params(self, *batch):
+        """Return transform parameters.
+
+        Parameters
+        ----------
+        X : tensor.Tensor
+            The data.
+        y : tensor.Tensor
+            The labels.
+
+        Returns
+        -------
+        params : dict
+            Contains the number of segments to split the signal into.
+        """
+        return {"n_segments": self.n_segments}
+

@@ -959,7 +959,7 @@ def mixup(X, y, lam, idx_perm):
     return X_mix, (y_a, y_b, lam)
 
 
-def segmentation_reconstruction(X, y, n_segments=8, random_state=None):
+def segmentation_reconst(X, y, n_segments=8, random_state=None):
     """Segment and reconstruct EEG data.
 
     Proposed in [1]_
