@@ -997,19 +997,15 @@ def segmentation_reconst(X, y, n_segments=8, random_state=None):
     aug_label = []
     # Getting the random state
     rng = check_random_state(random_state)
-
+    data_classes = [(X[y == i], i) for i in range(n_classes)]
+    n_samples, n_channels, window_size = X.shape
     # Iterate through each class to separate and augment data
-    for class_index in range(n_classes):
-        # Filter instances by class
-        class_mask = y == class_index
-        X_class = X[class_mask]
-
-        # Determine class-specific dimensions
-        n_samples, n_channels, window_size = X_class.shape
+    for X_class, class_index in data_classes:
+        # Segment Size
         segment_size = window_size // n_segments
 
         # Initialize an empty tensor for augmented data
-        X_aug = torch.zeros_like(X_class)
+        X_aug = torch.zeros(n_samples, n_channels, window_size)
 
         # Use PyTorch's random generator for consistency
         for idx_sample in range(n_samples):
@@ -1021,13 +1017,14 @@ def segmentation_reconst(X, y, n_segments=8, random_state=None):
                 end = (idx_segment + 1) * segment_size
 
                 # Perform the data augmentation
-                X_aug[idx_sample, :, start:end] = X_class[
+                X_aug[idx_sample, :, start:end] = X[
                                                   rand_idx[idx_segment], :,
                                                   start:end]
 
         # Store the augmented data and the corresponding class labels
         aug_data.append(X_aug)
-        aug_label.append(torch.full((n_samples,), class_index, dtype=y.dtype,
+        aug_label.append(torch.full((n_samples,), class_index,
+                                    dtype=y.dtype,
                                     device=y.device))
 
     # Concatenate the augmented data and labels
