@@ -1151,4 +1151,3 @@ class SegmentationReconstruction(Transform):
             Contains the number of segments to split the signal into.
         """
         return {"n_segments": self.n_segments}
-
