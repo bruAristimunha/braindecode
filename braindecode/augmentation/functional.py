@@ -1005,8 +1005,7 @@ def segmentation_reconst(X, y, n_segments=8, random_state=None):
         segment_size = window_size // n_segments
 
         # Initialize an empty tensor for augmented data
-        X_aug = torch.zeros(n_samples, n_channels, window_size)
-
+        X_aug = torch.zeros_like(X_class)
         # Use PyTorch's random generator for consistency
         for idx_sample in range(n_samples):
             for idx_segment in range(n_segments):
@@ -1017,13 +1016,13 @@ def segmentation_reconst(X, y, n_segments=8, random_state=None):
                 end = (idx_segment + 1) * segment_size
 
                 # Perform the data augmentation
-                X_aug[idx_sample, :, start:end] = X[
+                X_aug[idx_sample, :, start:end] = X_class[
                                                   rand_idx[idx_segment], :,
                                                   start:end]
 
         # Store the augmented data and the corresponding class labels
         aug_data.append(X_aug)
-        aug_label.append(torch.full((n_samples*n_classes,),
+        aug_label.append(torch.full((n_samples,),
                                     class_index,
                                     dtype=y.dtype,
                                     device=y.device))
