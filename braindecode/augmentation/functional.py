@@ -1023,7 +1023,8 @@ def segmentation_reconst(X, y, n_segments=8, random_state=None):
 
         # Store the augmented data and the corresponding class labels
         aug_data.append(X_aug)
-        aug_label.append(torch.full((n_samples,), class_index,
+        aug_label.append(torch.full((n_samples*n_classes,),
+                                    class_index,
                                     dtype=y.dtype,
                                     device=y.device))
 
