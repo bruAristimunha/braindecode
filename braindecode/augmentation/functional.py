@@ -998,12 +998,12 @@ def segmentation_reconst(X, y, n_segments=8, random_state=None):
     # Getting the random state
     rng = check_random_state(random_state)
     data_classes = [(X[y == i], i) for i in range(n_classes)]
-    n_samples, n_channels, window_size = X.shape
     # Iterate through each class to separate and augment data
     for X_class, class_index in data_classes:
+        # Determine class-specific dimensions
+        n_samples, n_channels, window_size = X_class.shape
         # Segment Size
         segment_size = window_size // n_segments
-
         # Initialize an empty tensor for augmented data
         X_aug = torch.zeros_like(X_class)
         # Use PyTorch's random generator for consistency
