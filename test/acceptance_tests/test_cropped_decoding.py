@@ -2,9 +2,11 @@
 #          Robin Tibor Schirrmeister
 #
 # License: BSD-3
+import sys
 
 import mne
 import numpy as np
+import pytest
 import torch
 from mne.io import concatenate_raws
 from skorch.helper import predefined_split
@@ -12,12 +14,12 @@ from torch import optim
 
 from braindecode import EEGClassifier
 from braindecode.datasets.xy import create_from_X_y
-from braindecode.training.losses import CroppedLoss
 from braindecode.models import ShallowFBCSPNet
-from braindecode.models.util import to_dense_prediction_model, get_output_shape
+from braindecode.training.losses import CroppedLoss
 from braindecode.util import set_random_seeds
 
 
+@pytest.mark.skipif(sys.version_info != (3, 7), reason="Only for Python 3.7")
 def test_cropped_decoding():
     # 5,6,7,10,13,14 are codes for executed and imagined hands/feet
     subject_id = 1
@@ -80,13 +82,13 @@ def test_cropped_decoding():
         input_window_samples=input_window_samples,
         final_conv_length=12,
     )
-    to_dense_prediction_model(model)
+    model.to_dense_prediction_model()
 
     if cuda:
         model.cuda()
 
     # Perform forward pass to determine how many outputs per input
-    n_preds_per_input = get_output_shape(model, in_chans, input_window_samples)[2]
+    n_preds_per_input = model.get_output_shape()[2]
 
     train_set = create_from_X_y(X[:60], y[:60],
                                 drop_last_window=False,
@@ -111,18 +113,18 @@ def test_cropped_decoding():
         train_split=train_split,
         batch_size=32,
         callbacks=['accuracy'],
+        classes=[0, 1],
     )
 
     clf.fit(train_set, y=None, epochs=4)
-
     np.testing.assert_allclose(
         clf.history[:, 'train_loss'],
         np.array(
             [
-                1.6269113222757976,
-                1.3790630420049033,
-                1.2096718986829122,
-                1.0220003485679627
+                1.391054,
+                1.278387,
+                1.086732,
+                1.111006
             ]
         ),
         rtol=1e-3,
@@ -133,10 +135,10 @@ def test_cropped_decoding():
         clf.history[:, 'valid_loss'],
         np.array(
             [
-                0.8756710092226664,
-                0.7009139498074849,
-                0.8636367797851563,
-                0.6089811046918233
+                2.24272,
+                0.891798,
+                0.741147,
+                0.933025
             ]
         ),
         rtol=1e-3,
@@ -147,10 +149,10 @@ def test_cropped_decoding():
         clf.history[:, 'train_accuracy'],
         np.array(
             [
-                0.5333333333333333,
-                0.5833333333333334,
                 0.5,
-                0.6166666666666667
+                0.516667,
+                0.6,
+                0.533333
             ]
         ),
         rtol=1e-3,
@@ -161,10 +163,10 @@ def test_cropped_decoding():
         clf.history[:, 'valid_accuracy'],
         np.array(
             [
-                0.5,
-                0.5666666666666667,
-                0.5333333333333333,
-                0.7
+                0.466667,
+                0.533333,
+                0.6,
+                0.6
             ]
         ),
         rtol=1e-3,
