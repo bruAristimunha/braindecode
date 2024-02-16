@@ -23,6 +23,8 @@ Current 0.9 (dev0)
 
 Enhancements
 ~~~~~~~~~~~~
+- Add SPDNet model :class:`braindecode.models.SPDNet` (:gh:`534` by `Théo Gnassounou`_ and `Bruno Aristimunha`_)
+
 
 Bugs
 ~~~~
