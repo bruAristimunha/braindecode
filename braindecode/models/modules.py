@@ -60,8 +60,7 @@ class Expression(nn.Module):
 
 
 class SafeLog(nn.Module):
-    """
-    Safe logarithm activation function module.
+    """Safe logarithm activation function module.
 
     :math:\text{SafeLog}(x) = \log\left(\max(x, \epsilon)\right)
 
@@ -96,6 +95,13 @@ class SafeLog(nn.Module):
     def extra_repr(self) -> str:
         eps_str = f"eps={self.eps}"
         return eps_str
+
+
+class Square(nn.Module):
+    """Square activation function."""
+
+    def forward(self, x):
+        return torch.square(x)
 
 
 class AvgPool2dWithConv(nn.Module):
