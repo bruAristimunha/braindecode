@@ -194,7 +194,7 @@ class ADFCNN(EEGModuleMixin, nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         # Final Classification Layer
-        self.final_layer = nn.Conv2d(8, self.n_outputs, kernel_size=(1, 51))
+        self.final_layer = nn.Conv2d(F1, self.n_outputs, kernel_size=(1, 51))
 
     def forward(self, x):
         """
@@ -222,7 +222,8 @@ class ADFCNN(EEGModuleMixin, nn.Module):
         )  # Shape: (B, F2, H2, W2)
 
         out = self.final_layer(x_attention)
-
+        out = torch.squeeze(out, 3)
+        out = torch.squeeze(out, 2)
         return out
 
 
