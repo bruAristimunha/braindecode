@@ -1101,6 +1101,7 @@ def test_parameters_EEGTCNet():
 
 
 
+
 @pytest.mark.parametrize(
     "temporal_layer", ['VarLayer', 'StdLayer', 'LogVarLayer',
                        'MeanLayer', 'MaxLayer']
@@ -1382,6 +1383,7 @@ def test_eegminer_plv_values_range():
     # PLV values should be in [0, 1]
     assert torch.all(x >= 0.0) and torch.all(x <= 1.0), \
         "PLV values should be in the range [0, 1]"
+
 
 
 @pytest.fixture

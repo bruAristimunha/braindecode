@@ -81,6 +81,7 @@ Models
     EEGResNet
     EEGSimpleConv
     EEGTCNet
+    FBEEGNet
     FBCNet
     FBLightConvNet
     FBMSNet
