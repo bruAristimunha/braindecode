@@ -44,7 +44,6 @@ from braindecode.models import (
     AttentionBaseNet,
     SPARCNet,
     ContraWR,
-    EEGMiner
     FBCNet,
     EEGMiner,
     IFNetV2,
