@@ -20,6 +20,7 @@ from braindecode.models.base import EEGModuleMixin
 from braindecode.models.eegconformer import (
     _FeedForwardBlock,
     _MultiHeadAttention,
+    _FinalLayer,
 )
 
 
@@ -57,7 +58,7 @@ class CTNet(EEGModuleMixin, nn.Module):
     ----------
     activation : nn.Module, default=nn.GELU
         Activation function to use in the network.
-    heads : int, default=4
+    nhead : int, default=4
         Number of attention heads in the Transformer encoder.
     emb_size : int, default=40
         Embedding size (dimensionality) for the Transformer encoder.
@@ -79,7 +80,9 @@ class CTNet(EEGModuleMixin, nn.Module):
         Dropout probability for the positional encoding in the Transformer.
     drop_prob_final : float, default=0.5
         Dropout probability before the final classification layer.
-
+    return_features: bool
+        If True, the forward method returns the features before the
+        last classification layer. Defaults to False.
 
     Notes
     -----
@@ -120,6 +123,7 @@ class CTNet(EEGModuleMixin, nn.Module):
         depth_multiplier: int = 2,
         pool_size_1: int = 8,
         pool_size_2: int = 8,
+        return_features: bool = False,
     ):
         super().__init__(
             n_outputs=n_outputs,
@@ -187,8 +191,10 @@ class CTNet(EEGModuleMixin, nn.Module):
             nn.Dropout(p=self.drop_prob_final),
         )
 
-        self.final_layer = nn.Linear(
-            in_features=emb_size * sequence_length, out_features=self.n_outputs
+        self.final_layer = _FinalLayer(
+            hidden_channels=emb_size * sequence_length,
+            n_classes=self.n_outputs,
+            return_features=return_features,
         )
 
     def forward(self, x: Tensor) -> Tensor:

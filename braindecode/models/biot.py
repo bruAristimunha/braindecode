@@ -364,7 +364,7 @@ class BIOT(EEGModuleMixin, nn.Module):
     activation: nn.Module, default=nn.ELU
         Activation function class to apply. Should be a PyTorch activation
         module class like ``nn.ReLU`` or ``nn.ELU``. Default is ``nn.ELU``.
-    return_feature: bool, optional
+    return_features: bool, optional
         Changing the output for the neural network. Default is single tensor
         when return_feature is True, return embedding space too.
         Default is False.
@@ -391,7 +391,7 @@ class BIOT(EEGModuleMixin, nn.Module):
         num_layers=4,
         sfreq=200,
         hop_length=100,
-        return_feature=False,
+        return_features=False,
         n_outputs=None,
         n_chans=None,
         chs_info=None,
@@ -413,7 +413,7 @@ class BIOT(EEGModuleMixin, nn.Module):
         self.hop_length = hop_length
         self.nhead = nhead
         self.num_layers = num_layers
-        self.return_feature = return_feature
+        self.return_features = return_features
         if (self.sfreq != 200) & (self.sfreq is not None):
             warn(
                 "This model has only been trained on a dataset with 200 Hz. "
@@ -471,7 +471,7 @@ class BIOT(EEGModuleMixin, nn.Module):
         emb = self.encoder(x)
         x = self.final_layer(emb)
 
-        if self.return_feature:
+        if self.return_features:
             return x, emb
         else:
             return x
