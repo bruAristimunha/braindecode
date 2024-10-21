@@ -58,9 +58,9 @@ class EEGConformer(EEGModuleMixin, nn.Module):
         Length of stride between temporal pooling filters.
     drop_prob: float
         Dropout rate of the convolutional layer.
-    att_depth: int
+    num_layers: int
         Number of self-attention layers.
-    att_heads: int
+    nhead: int
         Number of attention heads.
     att_drop_prob: float
         Dropout rate of the self-attention layer.

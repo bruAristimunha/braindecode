@@ -54,7 +54,7 @@ class ATCNet(EEGModuleMixin, nn.Module):
     nhead : int
         Number of attention heads, denoted H in table 1 of the paper [1]_.
         Defaults to 2 as in [1]_.
-    att_dropout : float
+    att_drop_prob : float
         Dropout probability used in the attention block, denoted pa in table 1
         of the paper [1]_. Defaults to 0.5 as in [1]_.
     tcn_depth : int
@@ -67,7 +67,7 @@ class ATCNet(EEGModuleMixin, nn.Module):
     tcn_n_filters : int
         Number of filters used in TCN convolutional layers (Ft). Defaults to
         32 as in [1]_.
-    tcn_dropout : float
+    tcn_drop_prob : float
         Dropout probability used in the TCN block, denoted pt in table 1
         of the paper [1]_. Defaults to 0.3 as in [1]_.
     tcn_activation : torch.nn.Module
