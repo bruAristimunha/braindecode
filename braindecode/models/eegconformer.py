@@ -97,7 +97,7 @@ class EEGConformer(EEGModuleMixin, nn.Module):
         drop_prob=0.5,
         *,
         num_layers=6,
-        att_heads=10,
+        nhead=10,
         att_drop_prob=0.5,
         final_fc_length="auto",
         return_features=False,
@@ -147,7 +147,7 @@ class EEGConformer(EEGModuleMixin, nn.Module):
         self.transformer = _TransformerEncoder(
             num_layers=num_layers,
             emb_size=n_filters_time,
-            att_heads=att_heads,
+            nhead=nhead,
             att_drop=att_drop_prob,
             activation=activation_transfor,
         )
@@ -243,10 +243,10 @@ class _PatchEmbedding(nn.Module):
 
 
 class _MultiHeadAttention(nn.Module):
-    def __init__(self, emb_size, num_heads, dropout):
+    def __init__(self, emb_size, nhead, dropout):
         super().__init__()
         self.emb_size = emb_size
-        self.num_heads = num_heads
+        self.nhead = nhead
         self.keys = nn.Linear(emb_size, emb_size)
         self.queries = nn.Linear(emb_size, emb_size)
         self.values = nn.Linear(emb_size, emb_size)
@@ -254,9 +254,9 @@ class _MultiHeadAttention(nn.Module):
         self.projection = nn.Linear(emb_size, emb_size)
 
     def forward(self, x: Tensor, mask: Tensor = None) -> Tensor:
-        queries = rearrange(self.queries(x), "b n (h d) -> b h n d", h=self.num_heads)
-        keys = rearrange(self.keys(x), "b n (h d) -> b h n d", h=self.num_heads)
-        values = rearrange(self.values(x), "b n (h d) -> b h n d", h=self.num_heads)
+        queries = rearrange(self.queries(x), "b n (h d) -> b h n d", h=self.nhead)
+        keys = rearrange(self.keys(x), "b n (h d) -> b h n d", h=self.nhead)
+        values = rearrange(self.values(x), "b n (h d) -> b h n d", h=self.nhead)
         energy = torch.einsum("bhqd, bhkd -> bhqk", queries, keys)
         if mask is not None:
             fill_value = torch.finfo(torch.float32).min
@@ -336,7 +336,7 @@ class _TransformerEncoder(nn.Sequential):
         Number of transformer encoder blocks.
     emb_size : int
         Embedding size of the transformer encoder.
-    att_heads : int
+    nhead : int
         Number of attention heads.
     att_drop : float
         Dropout probability for the attention layers.
@@ -344,12 +344,12 @@ class _TransformerEncoder(nn.Sequential):
     """
 
     def __init__(
-        self, num_layers, emb_size, att_heads, att_drop, activation: nn.Module = nn.GELU
+        self, num_layers, emb_size, nhead, att_drop, activation: nn.Module = nn.GELU
     ):
         super().__init__(
             *[
                 _TransformerEncoderBlock(
-                    emb_size, att_heads, att_drop, activation=activation
+                    emb_size, nhead, att_drop, activation=activation
                 )
                 for _ in range(num_layers)
             ]

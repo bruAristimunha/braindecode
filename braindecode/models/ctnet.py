@@ -112,7 +112,7 @@ class CTNet(EEGModuleMixin, nn.Module):
         drop_prob_final: float = 0.5,
         # other parameters
         *,
-        heads: int = 4,
+        nhead: int = 4,
         emb_size: int = 40,
         num_layers: int = 6,
         n_filters_time: int = 20,
@@ -176,7 +176,10 @@ class CTNet(EEGModuleMixin, nn.Module):
         )
 
         self.trans = _TransformerEncoder(
-            heads, num_layers, emb_size, activation=self.activation
+            nhead=nhead,
+            num_layers=num_layers,
+            dim_feedforward=emb_size,
+            activation=self.activation,
         )
 
         self.flatten_drop_layer = nn.Sequential(
@@ -323,7 +326,7 @@ class _TransformerEncoderBlock(nn.Module):
     def __init__(
         self,
         dim_feedforward: int,
-        num_heads: int = 4,
+        nhead: int = 4,
         drop_prob: float = 0.5,
         forward_expansion: int = 4,
         forward_drop_p: float = 0.5,
@@ -332,7 +335,7 @@ class _TransformerEncoderBlock(nn.Module):
         super().__init__()
         self.attention = _ResidualAdd(
             nn.Sequential(
-                _MultiHeadAttention(dim_feedforward, num_heads, drop_prob),
+                _MultiHeadAttention(dim_feedforward, nhead, drop_prob),
             ),
             dim_feedforward,
             drop_prob,
@@ -374,7 +377,7 @@ class _TransformerEncoderBlock(nn.Module):
 class _TransformerEncoder(nn.Module):
     def __init__(
         self,
-        nheads: int,
+        nhead: int,
         num_layers: int,
         dim_feedforward: int,
         activation: nn.Module = nn.GELU,
@@ -384,7 +387,7 @@ class _TransformerEncoder(nn.Module):
             *[
                 _TransformerEncoderBlock(
                     dim_feedforward=dim_feedforward,
-                    num_heads=nheads,
+                    nhead=nhead,
                     activation=activation,
                 )
                 for _ in range(num_layers)

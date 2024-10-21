@@ -133,7 +133,7 @@ class Labram(EEGModuleMixin, nn.Module):
         in_channels=1,
         out_channels=8,
         num_layers=12,
-        att_num_heads=10,
+        nhead=10,
         mlp_ratio=4.0,
         qkv_bias=False,
         qk_norm=None,
@@ -245,7 +245,7 @@ class Labram(EEGModuleMixin, nn.Module):
             [
                 _WindowsAttentionBlock(
                     dim=self.emb_size,
-                    num_heads=att_num_heads,
+                    num_heads=nhead,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_norm=qk_norm,

@@ -51,7 +51,7 @@ class ATCNet(EEGModuleMixin, nn.Module):
     att_head_dim : int
         Embedding dimension used in each self-attention head, denoted dh in
         table 1 of the paper [1]_. Defaults to 8 as in [1]_.
-    att_num_heads : int
+    nhead : int
         Number of attention heads, denoted H in table 1 of the paper [1]_.
         Defaults to 2 as in [1]_.
     att_dropout : float
@@ -99,6 +99,7 @@ class ATCNet(EEGModuleMixin, nn.Module):
         n_outputs=None,
         input_window_seconds=None,
         sfreq=250,
+        *,
         conv_block_n_filters=16,
         conv_block_kernel_length_1=64,
         conv_block_kernel_length_2=16,
@@ -108,7 +109,7 @@ class ATCNet(EEGModuleMixin, nn.Module):
         conv_block_dropout=0.3,
         n_windows=5,
         att_head_dim=8,
-        att_num_heads=2,
+        nhead=2,
         att_drop_prob=0.5,
         tcn_depth=2,
         tcn_kernel_size=4,
@@ -138,7 +139,7 @@ class ATCNet(EEGModuleMixin, nn.Module):
         self.conv_block_dropout = conv_block_dropout
         self.n_windows = n_windows
         self.att_head_dim = att_head_dim
-        self.att_num_heads = att_num_heads
+        self.nhead = nhead
         self.att_dropout = att_drop_prob
         self.tcn_depth = tcn_depth
         self.tcn_kernel_size = tcn_kernel_size
@@ -179,7 +180,7 @@ class ATCNet(EEGModuleMixin, nn.Module):
                 _AttentionBlock(
                     in_shape=self.F2,
                     head_dim=self.att_head_dim,
-                    num_heads=att_num_heads,
+                    nhead=nhead,
                     dropout=att_drop_prob,
                 )
                 for _ in range(self.n_windows)
@@ -398,13 +399,13 @@ class _AttentionBlock(nn.Module):
         self,
         in_shape=32,
         head_dim=8,
-        num_heads=2,
+        nhead=2,
         dropout=0.5,
     ):
         super().__init__()
         self.in_shape = in_shape
         self.head_dim = head_dim
-        self.num_heads = num_heads
+        self.nhead = nhead
 
         # Puts time dimension at -2 and feature dim at -1
         self.dimshuffle = Rearrange("batch C T -> batch T C")
@@ -420,7 +421,7 @@ class _AttentionBlock(nn.Module):
             input_dim=in_shape,
             head_dim=head_dim,
             output_dim=in_shape,
-            num_heads=num_heads,
+            num_heads=nhead,
             dropout=dropout,
         )
 
@@ -547,7 +548,7 @@ class _MHA(nn.Module):
         input_dim: int,
         head_dim: int,
         output_dim: int,
-        num_heads: int,
+        nhead: int,
         dropout: float = 0.0,
     ):
         """Multi-head Attention
@@ -577,7 +578,7 @@ class _MHA(nn.Module):
         self.input_dim = input_dim
         self.head_dim = head_dim
         # typical choice for the split dimension of the heads
-        self.embed_dim = head_dim * num_heads
+        self.embed_dim = head_dim * nhead
 
         # embeddings for multi-head projections
         self.fc_q = nn.Linear(input_dim, self.embed_dim)

@@ -101,12 +101,10 @@ class _PositionalEncoding(nn.Module):
     ----------
     emb_size: int
         The size of the embedding layer
-    dropout: float
-        The dropout rate
-    max_len: int
-        The maximum length of the sequence
     drop_prob : float, default=0.5
         The dropout rate for regularization. Values should be between 0 and 1.
+    max_len: int
+        The maximum length of the sequence
 
     Returns
     -------
@@ -181,7 +179,7 @@ class _BIOTEncoder(nn.Module):
     def __init__(
         self,
         emb_size: int = 256,  # The size of the embedding layer
-        att_num_heads: int = 8,  # The number of attention heads
+        nhead: int = 8,  # The number of attention heads
         n_chans: int = 16,  # The number of channels
         num_layers: int = 4,  # The number of transformer layers
         n_fft: int = 200,  # Related with the frequency resolution
@@ -198,7 +196,7 @@ class _BIOTEncoder(nn.Module):
         )
         self.transformer = LinearAttentionTransformer(
             dim=emb_size,
-            heads=att_num_heads,
+            heads=nhead,
             depth=num_layers,
             max_seq_len=1024,
             attn_layer_dropout=0.2,  # dropout right after self-attention layer
@@ -359,9 +357,9 @@ class BIOT(EEGModuleMixin, nn.Module):
     ----------
     emb_size : int, optional
         The size of the embedding layer, by default 256
-    att_num_heads : int, optional
+    nhead : int, optional
         The number of attention heads, by default 8
-    n_layers : int, optional
+    num_layers : int, optional
         The number of transformer layers, by default 4
     activation: nn.Module, default=nn.ELU
         Activation function class to apply. Should be a PyTorch activation
@@ -389,7 +387,7 @@ class BIOT(EEGModuleMixin, nn.Module):
     def __init__(
         self,
         emb_size=256,
-        att_num_heads=8,
+        nhead=8,
         num_layers=4,
         sfreq=200,
         hop_length=100,
@@ -413,7 +411,7 @@ class BIOT(EEGModuleMixin, nn.Module):
         del n_outputs, n_chans, chs_info, n_times, sfreq
         self.emb_size = emb_size
         self.hop_length = hop_length
-        self.att_num_heads = att_num_heads
+        self.nhead = nhead
         self.num_layers = num_layers
         self.return_feature = return_feature
         if (self.sfreq != 200) & (self.sfreq is not None):
@@ -439,7 +437,7 @@ class BIOT(EEGModuleMixin, nn.Module):
             hop_length = self.sfreq // 2
         self.encoder = _BIOTEncoder(
             emb_size=emb_size,
-            att_num_heads=att_num_heads,
+            nhead=nhead,
             num_layers=self.num_layers,
             n_chans=self.n_chans,
             n_fft=self.sfreq,
