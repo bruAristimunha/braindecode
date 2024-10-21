@@ -170,7 +170,7 @@ class _BIOTEncoder(nn.Module):
         The size of the embedding layer
     att_num_heads: int
         The number of attention heads
-    n_layers: int
+    num_layers: int
         The number of transformer layers
     n_fft: int
         The number of Fourier transform points
@@ -180,12 +180,12 @@ class _BIOTEncoder(nn.Module):
 
     def __init__(
         self,
-        emb_size=256,  # The size of the embedding layer
-        att_num_heads=8,  # The number of attention heads
-        n_chans=16,  # The number of channels
-        n_layers=4,  # The number of transformer layers
-        n_fft=200,  # Related with the frequency resolution
-        hop_length=100,
+        emb_size: int = 256,  # The size of the embedding layer
+        att_num_heads: int = 8,  # The number of attention heads
+        n_chans: int = 16,  # The number of channels
+        num_layers: int = 4,  # The number of transformer layers
+        n_fft: int = 200,  # Related with the frequency resolution
+        hop_length: int = 100,
         drop_prob: float = 0.1,
     ):
         super().__init__()
@@ -199,7 +199,7 @@ class _BIOTEncoder(nn.Module):
         self.transformer = LinearAttentionTransformer(
             dim=emb_size,
             heads=att_num_heads,
-            depth=n_layers,
+            depth=num_layers,
             max_seq_len=1024,
             attn_layer_dropout=0.2,  # dropout right after self-attention layer
             attn_dropout=0.2,  # dropout post-attention
@@ -390,7 +390,7 @@ class BIOT(EEGModuleMixin, nn.Module):
         self,
         emb_size=256,
         att_num_heads=8,
-        n_layers=4,
+        num_layers=4,
         sfreq=200,
         hop_length=100,
         return_feature=False,
@@ -414,7 +414,7 @@ class BIOT(EEGModuleMixin, nn.Module):
         self.emb_size = emb_size
         self.hop_length = hop_length
         self.att_num_heads = att_num_heads
-        self.n_layers = n_layers
+        self.num_layers = num_layers
         self.return_feature = return_feature
         if (self.sfreq != 200) & (self.sfreq is not None):
             warn(
@@ -440,7 +440,7 @@ class BIOT(EEGModuleMixin, nn.Module):
         self.encoder = _BIOTEncoder(
             emb_size=emb_size,
             att_num_heads=att_num_heads,
-            n_layers=n_layers,
+            num_layers=self.num_layers,
             n_chans=self.n_chans,
             n_fft=self.sfreq,
             hop_length=hop_length,

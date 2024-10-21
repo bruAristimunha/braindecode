@@ -66,7 +66,7 @@ class Labram(EEGModuleMixin, nn.Module):
         The number of convolutional input channels.
     out_channels : int
         The number of convolutional output channels.
-    n_layers :  int (default=12)
+    num_layers :  int (default=12)
         The number of attention layers of the model.
     att_num_heads : int (default=10)
         The number of attention heads.
@@ -132,7 +132,7 @@ class Labram(EEGModuleMixin, nn.Module):
         emb_size=200,
         in_channels=1,
         out_channels=8,
-        n_layers=12,
+        num_layers=12,
         att_num_heads=10,
         mlp_ratio=4.0,
         qkv_bias=False,
@@ -239,7 +239,7 @@ class Labram(EEGModuleMixin, nn.Module):
         self.pos_drop = nn.Dropout(p=drop_prob)
 
         dpr = [
-            x.item() for x in torch.linspace(0, drop_path_prob, n_layers)
+            x.item() for x in torch.linspace(0, drop_path_prob, num_layers)
         ]  # stochastic depth decay rule
         self.blocks = nn.ModuleList(
             [
@@ -263,7 +263,7 @@ class Labram(EEGModuleMixin, nn.Module):
                     attn_head_dim=attn_head_dim,
                     activation=activation,
                 )
-                for i in range(n_layers)
+                for i in range(num_layers)
             ]
         )
         self.norm = nn.Identity() if use_mean_pooling else norm_layer(self.emb_size)
