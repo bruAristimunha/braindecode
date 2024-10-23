@@ -70,6 +70,8 @@ Bugs
 - Ensure mypy to work for every commit (:gh:`619` by `Bruno Aristimunha`_)
 - Deprecate moabb version 1.0.0 because of incorrect epoching (:gh:`627` by `Pierre Guetschel`_)
 - Fixing tutorial benchmark lazy eager loagin (:gh:`` by `Bruno Aristimunha`_ and `Aphel`_)
+- Fixing :func:`braindecode.preprocessing.create_windows_from_events` to considerer drop_last (:gh:`XXX` by `Bruno Aristimunha`_)
+
 
 API changes
 ~~~~~~~~~~~
