@@ -547,6 +547,9 @@ def _create_windows_from_events(
         # in case not given, without this condition...
         # but then would have to change functions overall
         # to deal with varying window sizes hmmhmh
+        if drop_last_window:
+            this_trial_sizes = this_trial_sizes[:-1]
+
         assert np.all(this_trial_sizes == window_size_samples), (
             "All trial sizes should be the same if you do not supply a window " "size."
         )
