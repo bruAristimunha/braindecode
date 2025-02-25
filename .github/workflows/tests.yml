@@ -31,6 +31,8 @@ jobs:
       with:
         path: ~/mne_data
         key: ${{ runner.os }}-v3
+        restore-keys: |
+          ${{ runner.os }}-v3
     - uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
