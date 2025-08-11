@@ -33,7 +33,7 @@ class SleepStagerBlanco2020(EEGModuleMixin, nn.Module):
     apply_batch_norm : bool
         If True, apply batch normalization after both temporal convolutional
         layers.
-    return_feats : bool
+    return_features : bool
         If True, return the features, i.e. the output of the feature extractor
         (before the final linear layer). If False, pass the features through
         the final linear layer.
@@ -65,7 +65,7 @@ class SleepStagerBlanco2020(EEGModuleMixin, nn.Module):
         max_pool_size=2,
         drop_prob=0.5,
         apply_batch_norm=False,
-        return_feats=False,
+        return_features=False,
         activation: nn.Module = nn.ReLU,
         chs_info=None,
         n_times=None,
@@ -131,15 +131,13 @@ class SleepStagerBlanco2020(EEGModuleMixin, nn.Module):
         )
 
         self.len_last_layer = self._len_last_layer(self.n_chans, self.n_times)
-        self.return_feats = return_feats
+        self.return_features = return_features
 
-        # TODO: Add new way to handle return_features == True
-        if not return_feats:
-            self.final_layer = nn.Sequential(
-                nn.Dropout(drop_prob),
-                nn.Linear(self.len_last_layer, self.n_outputs),
-                nn.Identity(),
-            )
+        self.final_layer = nn.Sequential(
+            nn.Dropout(drop_prob),
+            nn.Linear(self.len_last_layer, self.n_outputs),
+            nn.Identity(),
+        )
 
     def _len_last_layer(self, n_channels, input_size):
         self.feature_extractor.eval()
@@ -161,7 +159,6 @@ class SleepStagerBlanco2020(EEGModuleMixin, nn.Module):
             x = x.unsqueeze(2)
 
         feats = self.feature_extractor(x).flatten(start_dim=1)
-        if self.return_feats:
+        if self.return_features:
             return feats
-        else:
-            return self.final_layer(feats)
+        return self.final_layer(feats)

@@ -53,7 +53,7 @@ class SleepStagerEldele2021(EEGModuleMixin, nn.Module):
         Dropout rate in the PositionWiseFeedforward layer and the TCE layers.
     after_reduced_cnn_size : int
         Number of output channels produced by the convolution in the AFR module.
-    return_feats : bool
+    return_features : bool
         If True, return the features, i.e. the output of the feature extractor
         (before the final linear layer). If False, pass the features through
         the final linear layer.
@@ -93,7 +93,7 @@ class SleepStagerEldele2021(EEGModuleMixin, nn.Module):
         input_window_seconds=None,
         n_outputs=None,
         after_reduced_cnn_size=30,
-        return_feats=False,
+        return_features=False,
         chs_info=None,
         n_chans=None,
         n_times=None,
@@ -150,15 +150,9 @@ class SleepStagerEldele2021(EEGModuleMixin, nn.Module):
 
         self.feature_extractor = nn.Sequential(mrcnn, tce)
         self.len_last_layer = self._len_last_layer(self.n_times)
-        self.return_feats = return_feats
+        self.return_features = return_features
 
-        # TODO: Add new way to handle return features
-        """if return_feats:
-            raise ValueError("return_feat == True is not accepted anymore")"""
-        if not return_feats:
-            self.final_layer = nn.Linear(
-                d_model * after_reduced_cnn_size, self.n_outputs
-            )
+        self.final_layer = nn.Linear(d_model * after_reduced_cnn_size, self.n_outputs)
 
     def _len_last_layer(self, input_size):
         self.feature_extractor.eval()
@@ -182,7 +176,7 @@ class SleepStagerEldele2021(EEGModuleMixin, nn.Module):
             encoded_features.shape[0], -1
         )
 
-        if self.return_feats:
+        if self.return_features:
             return encoded_features
 
         return self.final_layer(encoded_features)
