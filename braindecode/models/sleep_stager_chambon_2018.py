@@ -37,7 +37,7 @@ class SleepStagerChambon2018(EEGModuleMixin, nn.Module):
     apply_batch_norm : bool
         If True, apply batch normalization after both temporal convolutional
         layers.
-    return_feats : bool
+    return_features : bool
         If True, return the features, i.e. the output of the feature extractor
         (before the final linear layer). If False, pass the features through
         the final linear layer.
@@ -73,7 +73,7 @@ class SleepStagerChambon2018(EEGModuleMixin, nn.Module):
         n_outputs=5,
         drop_prob=0.25,
         apply_batch_norm=False,
-        return_feats=False,
+        return_features=False,
         chs_info=None,
         n_times=None,
     ):
@@ -115,7 +115,7 @@ class SleepStagerChambon2018(EEGModuleMixin, nn.Module):
             activation(),
             nn.MaxPool2d((1, max_pool_size)),
         )
-        self.return_feats = return_feats
+        self.return_features = return_features
 
         dim_conv_1 = (
             self.n_times + 2 * pad_size - (time_conv_size - 1)
@@ -126,12 +126,10 @@ class SleepStagerChambon2018(EEGModuleMixin, nn.Module):
 
         self.len_last_layer = n_conv_chs * self.n_chans * dim_after_conv
 
-        # TODO: Add new way to handle return_features == True
-        if not return_feats:
-            self.final_layer = nn.Sequential(
-                nn.Dropout(p=drop_prob),
-                nn.Linear(in_features=self.len_last_layer, out_features=self.n_outputs),
-            )
+        self.final_layer = nn.Sequential(
+            nn.Dropout(p=drop_prob),
+            nn.Linear(in_features=self.len_last_layer, out_features=self.n_outputs),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -151,7 +149,7 @@ class SleepStagerChambon2018(EEGModuleMixin, nn.Module):
 
         feats = self.feature_extractor(x).flatten(start_dim=1)
 
-        if self.return_feats:
+        if self.return_features:
             return feats
 
         return self.final_layer(feats)

@@ -25,7 +25,7 @@ class DeepSleepNet(EEGModuleMixin, nn.Module):
     activation_small: nn.Module, default=nn.ReLU
         Activation function class to apply. Should be a PyTorch activation
         module class like ``nn.ReLU`` or ``nn.ELU``. Default is ``nn.ReLU``.
-    return_feats : bool
+    return_features : bool
         If True, return the features, i.e. the output of the feature extractor
         (before the final linear layer). If False, pass the features through
         the final linear layer.
@@ -44,7 +44,7 @@ class DeepSleepNet(EEGModuleMixin, nn.Module):
     def __init__(
         self,
         n_outputs=5,
-        return_feats=False,
+        return_features=False,
         n_chans=None,
         chs_info=None,
         n_times=None,
@@ -73,13 +73,9 @@ class DeepSleepNet(EEGModuleMixin, nn.Module):
 
         self.features_extractor = nn.Identity()
         self.len_last_layer = 1024
-        self.return_feats = return_feats
+        self.return_features = return_features
 
-        # TODO: Add new way to handle return_features == True
-        if not return_feats:
-            self.final_layer = nn.Linear(1024, self.n_outputs)
-        else:
-            self.final_layer = nn.Identity()
+        self.final_layer = nn.Linear(1024, self.n_outputs)
 
     def forward(self, x):
         """Forward pass.
@@ -111,10 +107,9 @@ class DeepSleepNet(EEGModuleMixin, nn.Module):
 
         feats = self.features_extractor(x)
 
-        if self.return_feats:
+        if self.return_features:
             return feats
-        else:
-            return self.final_layer(feats)
+        return self.final_layer(feats)
 
 
 class _SmallCNN(nn.Module):

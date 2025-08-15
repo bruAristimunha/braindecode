@@ -23,7 +23,6 @@ from braindecode.models import (
     AttentionBaseNet,
     ContraWR,
     Deep4Net,
-    DeepSleepNet,
     EEGConformer,
     EEGInceptionERP,
     EEGInceptionMI,
@@ -41,9 +40,6 @@ from braindecode.models import (
     Labram,
     SCCNet,
     ShallowFBCSPNet,
-    SleepStagerBlanco2020,
-    SleepStagerChambon2018,
-    SleepStagerEldele2021,
     SPARCNet,
     TIDNet,
     TSceptionV1,
@@ -398,42 +394,6 @@ def test_atcnet_n_params():
 
 
 @pytest.mark.parametrize(
-    "n_channels,sfreq,n_classes,input_size_s",
-    [(20, 128, 5, 30), (10, 256, 4, 20), (1, 64, 2, 30)],
-)
-def test_sleep_stager(n_channels, sfreq, n_classes, input_size_s):
-    rng = np.random.RandomState(42)
-    time_conv_size_s = 0.5
-    max_pool_size_s = 0.125
-    pad_size_s = 0.25
-    n_examples = 10
-
-    model = SleepStagerChambon2018(
-        n_channels,
-        sfreq,
-        n_conv_chs=8,
-        time_conv_size_s=time_conv_size_s,
-        max_pool_size_s=max_pool_size_s,
-        pad_size_s=pad_size_s,
-        input_window_seconds=input_size_s,
-        n_outputs=n_classes,
-        drop_prob=0.25,
-    )
-    model.eval()
-
-    X = rng.randn(n_examples, n_channels, int(sfreq * input_size_s))
-    X = torch.from_numpy(X.astype(np.float32))
-
-    y_pred1 = model(X)  # 3D inputs
-    y_pred2 = model(X.unsqueeze(1))  # 4D inputs
-    assert y_pred1.shape == (n_examples, n_classes)
-    assert y_pred2.shape == (n_examples, n_classes)
-    np.testing.assert_allclose(
-        y_pred1.detach().cpu().numpy(), y_pred2.detach().cpu().numpy()
-    )
-
-
-@pytest.mark.parametrize(
     "n_chans,sfreq,n_classes,input_size_s",
     [(20, 128, 5, 30), (10, 100, 4, 20), (1, 64, 2, 30)],
 )
@@ -487,30 +447,6 @@ def test_usleep_n_params():
     assert n_params == 3114337  # From paper's supplementary materials, Table 2
 
 
-def test_sleep_stager_return_feats():
-    n_channels = 2
-    sfreq = 10
-    input_size_s = 30
-    n_classes = 3
-
-    model = SleepStagerChambon2018(
-        n_channels,
-        sfreq,
-        n_conv_chs=8,
-        input_window_seconds=input_size_s,
-        n_outputs=n_classes,
-        return_feats=True,
-    )
-    model.eval()
-
-    rng = np.random.RandomState(42)
-    X = rng.randn(10, n_channels, int(sfreq * input_size_s))
-    X = torch.from_numpy(X.astype(np.float32))
-
-    out = model(X)
-    assert out.shape == (10, model.len_last_layer)
-
-
 def test_tidnet(input_sizes):
     model = TIDNet(
         input_sizes["n_channels"],
@@ -518,112 +454,6 @@ def test_tidnet(input_sizes):
         input_sizes["n_in_times"],
     )
     check_forward_pass(model, input_sizes)
-
-
-@pytest.mark.parametrize(
-    "sfreq,n_classes,input_size_s,d_model",
-    [(100, 5, 30, 80), (125, 4, 30, 100)]
-)
-def test_eldele_2021(sfreq, n_classes, input_size_s, d_model):
-    # (100, 5, 30, 80) - Physionet Sleep
-    # (125, 4, 30, 100) - SHHS
-    rng = np.random.RandomState(42)
-    n_channels = 1
-    n_examples = 10
-
-    model = SleepStagerEldele2021(
-        sfreq=sfreq,
-        n_outputs=n_classes,
-        input_window_seconds=input_size_s,
-        d_model=d_model,
-        return_feats=False,
-    )
-    model.eval()
-
-    X = rng.randn(n_examples, n_channels,
-                  np.ceil(input_size_s * sfreq).astype(int))
-    X = torch.from_numpy(X.astype(np.float32))
-
-    y_pred1 = model(X)  # 3D inputs
-    assert y_pred1.shape == (n_examples, n_classes)
-
-
-def test_eldele_2021_feats():
-    n_channels = 1
-    sfreq = 100
-    input_size_s = 30
-    n_classes = 3
-    n_examples = 10
-
-    model = SleepStagerEldele2021(
-        sfreq,
-        input_window_seconds=input_size_s,
-        n_outputs=n_classes,
-        return_feats=True,
-    )
-    model.eval()
-
-    rng = np.random.RandomState(42)
-    X = rng.randn(n_examples, n_channels, int(sfreq * input_size_s))
-    X = torch.from_numpy(X.astype(np.float32))
-
-    out = model(X)
-    assert out.shape == (n_examples, model.len_last_layer)
-
-
-@pytest.mark.parametrize(
-    "n_channels,sfreq,n_groups,n_classes,input_size_s",
-    [(20, 128, 2, 5, 30), (10, 100, 2, 4, 20), (1, 64, 1, 2, 30)],
-)
-def test_blanco_2020(n_channels, sfreq, n_groups, n_classes, input_size_s):
-    rng = np.random.RandomState(42)
-    n_examples = 10
-
-    model = SleepStagerBlanco2020(
-        n_chans=n_channels,
-        sfreq=sfreq,
-        n_groups=n_groups,
-        input_window_seconds=input_size_s,
-        n_outputs=n_classes,
-        return_feats=False,
-    )
-    model.eval()
-
-    X = rng.randn(n_examples, n_channels,
-                  np.ceil(input_size_s * sfreq).astype(int))
-    X = torch.from_numpy(X.astype(np.float32))
-
-    y_pred1 = model(X)  # 3D inputs
-    y_pred2 = model(X.unsqueeze(2))  # 4D inputs
-    assert y_pred1.shape == (n_examples, n_classes)
-    assert y_pred2.shape == (n_examples, n_classes)
-    np.testing.assert_allclose(
-        y_pred1.detach().cpu().numpy(), y_pred2.detach().cpu().numpy()
-    )
-
-
-def test_blanco_2020_feats():
-    n_channels = 2
-    sfreq = 50
-    input_size_s = 30
-    n_classes = 3
-    n_examples = 10
-
-    model = SleepStagerBlanco2020(
-        n_channels,
-        sfreq,
-        input_window_seconds=input_size_s,
-        n_outputs=n_classes,
-        return_feats=True,
-    )
-    model.eval()
-
-    rng = np.random.RandomState(42)
-    X = rng.randn(n_examples, n_channels, int(sfreq * input_size_s))
-    X = torch.from_numpy(X.astype(np.float32))
-
-    out = model(X)
-    assert out.shape == (n_examples, model.len_last_layer)
 
 
 def test_eegitnet_shape():
@@ -645,83 +475,6 @@ def test_eegitnet_shape():
 
     out = model(X)
     assert out.shape == (n_examples, n_classes)
-
-
-@pytest.mark.parametrize("n_classes", [5, 4, 2])
-def test_deepsleepnet(n_classes):
-    n_channels = 1
-    sfreq = 100
-    input_size_s = 30
-    n_examples = 10
-
-    model = DeepSleepNet(n_outputs=n_classes, return_feats=False)
-    model.eval()
-
-    rng = np.random.RandomState(42)
-    X = rng.randn(n_examples, n_channels,
-                  np.ceil(input_size_s * sfreq).astype(int))
-    X = torch.from_numpy(X.astype(np.float32))
-
-    y_pred1 = model(X)  # 3D inputs
-    y_pred2 = model(X.unsqueeze(1))  # 4D inputs
-    assert y_pred1.shape == (n_examples, n_classes)
-    assert y_pred2.shape == (n_examples, n_classes)
-    np.testing.assert_allclose(
-        y_pred1.detach().cpu().numpy(), y_pred2.detach().cpu().numpy()
-    )
-
-
-def test_deepsleepnet_feats():
-    n_channels = 1
-    sfreq = 100
-    input_size_s = 30
-    n_classes = 3
-    n_examples = 10
-
-    model = DeepSleepNet(n_outputs=n_classes, return_feats=True)
-    model.eval()
-
-    rng = np.random.RandomState(42)
-    X = rng.randn(n_examples, n_channels, int(sfreq * input_size_s))
-    X = torch.from_numpy(X.astype(np.float32))
-
-    out = model(X.unsqueeze(1))
-    assert out.shape == (n_examples, model.len_last_layer)
-
-
-def test_deepsleepnet_feats_with_hook():
-    n_channels = 1
-    sfreq = 100
-    input_size_s = 30
-    n_classes = 3
-    n_examples = 10
-
-    model = DeepSleepNet(n_outputs=n_classes, return_feats=False)
-    model.eval()
-
-    rng = np.random.RandomState(42)
-    X = rng.randn(n_examples, n_channels, int(sfreq * input_size_s))
-    X = torch.from_numpy(X.astype(np.float32))
-
-    def get_intermediate_layers(intermediate_layers, layer_name):
-        def hook(model, input, output):
-            intermediate_layers[layer_name] = output.flatten(
-                start_dim=1).detach()
-
-        return hook
-
-    intermediate_layers = {}
-    layer_name = "features_extractor"
-    model.features_extractor.register_forward_hook(
-        get_intermediate_layers(intermediate_layers, layer_name)
-    )
-
-    y_pred = model(X.unsqueeze(1))
-    assert intermediate_layers["features_extractor"].shape == (
-        n_examples,
-        model.len_last_layer,
-    )
-    assert y_pred.shape == (n_examples, n_classes)
 
 
 @pytest.fixture
