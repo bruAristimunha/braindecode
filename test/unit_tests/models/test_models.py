@@ -30,8 +30,8 @@ from braindecode.models import (
     EEGMiner,
     EEGNetv1,
     EEGNetv4,
-    EEGResNet,
     EEGNeX,
+    EEGResNet,
     EEGSimpleConv,
     EEGTCNet,
     FBCNet,
@@ -1491,7 +1491,7 @@ def test_batchnorm_deep4net(batch_norm):
     Test the number of trainable parameters in Deep4Net model.
     """
     model = Deep4Net(n_outputs=2, n_chans=22, n_times=1000, batch_norm=batch_norm)
-    
+
     assert model is not None
 
 def test_fc_length_eegconformer():
