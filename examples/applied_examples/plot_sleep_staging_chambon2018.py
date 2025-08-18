@@ -210,7 +210,7 @@ feat_extractor = SleepStagerChambon2018(
     sfreq,
     n_outputs=n_classes,
     n_times=input_size_samples,
-    return_feats=True,
+    return_features=True,
 )
 
 model = nn.Sequential(
