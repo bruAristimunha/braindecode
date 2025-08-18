@@ -149,7 +149,4 @@ class SleepStagerChambon2018(EEGModuleMixin, nn.Module):
 
         feats = self.feature_extractor(x).flatten(start_dim=1)
 
-        if self.return_features:
-            return feats
-
-        return self.final_layer(feats)
+        return feats if self.return_features else self.final_layer(feats)
