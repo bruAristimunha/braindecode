@@ -1,0 +1,47 @@
+# yamllint disable rule:indentation
+Documentation:
+- changed-files:
+  - any-glob-to-any-file: docs/**
+
+Examples:
+- changed-files:
+  - any-glob-to-any-file: examples/**
+
+Tests:
+- changed-files:
+  - any-glob-to-any-file: test/**
+
+CI:
+- changed-files:
+  - any-glob-to-any-file: .github/workflows/**
+
+datasets:
+- changed-files:
+  - any-glob-to-any-file: braindecode/datasets/**
+
+augmentation:
+- changed-files:
+  - any-glob-to-any-file: braindecode/augmentation/**
+
+models:
+- changed-files:
+  - any-glob-to-any-file: braindecode/models/**
+
+preprocessing:
+- changed-files:
+  - any-glob-to-any-file: braindecode/preprocessing/**
+
+training:
+- changed-files:
+  - any-glob-to-any-file: braindecode/training/**
+
+visualization:
+- changed-files:
+  - any-glob-to-any-file: braindecode/visualization/**
+
+core:
+- changed-files:
+  - any-glob-to-any-file: braindecode/classifier.py
+  - any-glob-to-any-file: braindecode/eegneuralnet.py
+  - any-glob-to-any-file: braindecode/regressor.py
+  - any-glob-to-any-file: braindecode/util.py
