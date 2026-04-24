@@ -34,14 +34,18 @@ jobs:
           key: docs-mne-data-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
             docs-mne-data-
-      # Cache HuggingFace Hub models
+      # Cache HuggingFace Hub models.
+      # Bump the ``-v2`` suffix to force a fresh populate whenever the prune
+      # strategy below changes; ``restore-keys`` only falls back to other
+      # ``-v2`` caches, so the older unpruned ``docs-hf-hub-*`` cache is
+      # ignored.
       - name: Create/Restore HuggingFace Cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface/hub
-          key: docs-hf-hub-${{ hashFiles('pyproject.toml') }}
+          key: docs-hf-hub-v2-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
-            docs-hf-hub-
+            docs-hf-hub-v2-
       # Install uv
       - name: Install uv
         uses: astral-sh/setup-uv@v3
@@ -61,6 +65,39 @@ jobs:
         run: |
           cd docs
           make html
+
+      # Drop stale revisions + empty ``.no_exist`` markers from the HF Hub
+      # cache before the post-job cache save. Each HF repo often accumulates
+      # multiple revisions across runs (the sha pinned when the example last
+      # ran); only the most recent revision is ever hit again, so older ones
+      # are pure bloat.
+      - name: Prune HuggingFace Hub cache
+        if: always()
+        run: |
+          python - <<'PY'
+          from huggingface_hub import scan_cache_dir
+
+          def fmt_gb(n):
+              return f"{n / 1024 ** 3:.2f} GB"
+
+          info = scan_cache_dir()
+          print(f"HF hub before prune: {fmt_gb(info.size_on_disk)} "
+                f"across {len(info.repos)} repos")
+          to_delete = []
+          for repo in info.repos:
+              revs = sorted(
+                  repo.revisions,
+                  key=lambda r: r.last_modified or 0,
+                  reverse=True,
+              )
+              for stale in revs[1:]:
+                  to_delete.append(stale.commit_hash)
+          if to_delete:
+              info.delete_revisions(*to_delete).execute()
+          info = scan_cache_dir()
+          print(f"HF hub after prune: {fmt_gb(info.size_on_disk)} "
+                f"across {len(info.repos)} repos")
+          PY
 
       - name: Generate Notebooks from Examples
         run: |
