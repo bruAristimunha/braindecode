@@ -72,3 +72,7 @@ thesis/
 
 # zoo-data.js is auto-generated into the build outdir by docs/sphinxext/zoo_data_gen.py
 docs/_static/zoo-data.js
+
+# Experiment tracking and tutorial run outputs
+wandb/
+tutorial_artifacts/
