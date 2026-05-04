@@ -1588,3 +1588,53 @@ def test_to_epochs_dataset_is_consistent(lazy_loadable_dataset):
         np.testing.assert_allclose(x_epo, x_eeg)
         assert y_epo == y_eeg
         assert crop_epo == crop_eeg
+
+
+def test_create_windows_from_events_empty_annotations(lazy_loadable_dataset):
+    """Stress test: Ensure windowing handles empty annotations (returns empty dataset)."""
+    # Deep copy to avoid side effects on other tests using the same fixture
+    ds = copy.deepcopy(lazy_loadable_dataset)
+    for d in ds.datasets:
+        d.raw.set_annotations(mne.Annotations(onset=[], duration=[], description=[]))
+
+    windows = create_windows_from_events(
+        concat_ds=ds,
+        window_size_samples=100,
+        window_stride_samples=100,
+        drop_last_window=False,
+    )
+    assert len(windows) == 0
+
+
+def test_create_fixed_length_windows_short_recording(lazy_loadable_dataset):
+    """Stress test: Window size larger than recording should raise ValueError."""
+    ds = copy.deepcopy(lazy_loadable_dataset)
+    # n_times in lazy_loadable_dataset is 20000
+    with pytest.raises(ValueError, match="exceeds trial duration"):
+        create_fixed_length_windows(
+            concat_ds=ds,
+            window_size_samples=30000,
+            window_stride_samples=100,
+            drop_last_window=False,
+        )
+
+
+@pytest.mark.parametrize("start_offset", [-50, 0, 50])
+@pytest.mark.parametrize("stop_offset", [-50, 0, 50])
+@pytest.mark.parametrize("window_size", [100, 200])
+@pytest.mark.parametrize("stride", [50, 100, 200])
+@pytest.mark.parametrize("drop_last", [True, False])
+def test_create_windows_from_events_parametrization(
+    lazy_loadable_dataset, start_offset, stop_offset, window_size, stride, drop_last
+):
+    """Extensive parametrization of windowing parameters."""
+    # Just ensure it runs and returns a valid dataset (possibly empty if offsets are too large)
+    create_windows_from_events(
+        concat_ds=lazy_loadable_dataset,
+        trial_start_offset_samples=start_offset,
+        trial_stop_offset_samples=stop_offset,
+        window_size_samples=window_size,
+        window_stride_samples=stride,
+        drop_last_window=drop_last,
+        accepted_bads_ratio=1.0,
+    )

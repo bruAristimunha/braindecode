@@ -635,24 +635,25 @@ def _create_windows_from_events(
 
     last_samp = ds.raw.first_samp + ds.raw.n_times - 1
     # `stops` is used exclusively (i.e. `start:stop`), so add back 1
-    if isinstance(trial_stop_offset_samples, dict):
-        # Check the max offset across all event types
-        max_stop_offset = max(trial_stop_offset_samples.values())
-        if stops[-1] + max_stop_offset > last_samp + 1:
-            raise ValueError(
-                '"trial_stop_offset_samples" too large. Stop of last trial '
-                f'({stops[-1]}) + max "trial_stop_offset_samples" '
-                f"({max_stop_offset}) must be smaller than length of"
-                f" recording ({len(ds)})."
-            )
-    else:
-        if stops[-1] + trial_stop_offset_samples > last_samp + 1:
-            raise ValueError(
-                '"trial_stop_offset_samples" too large. Stop of last trial '
-                f'({stops[-1]}) + "trial_stop_offset_samples" '
-                f"({trial_stop_offset_samples}) must be smaller than length of"
-                f" recording ({len(ds)})."
-            )
+    if len(stops) > 0:
+        if isinstance(trial_stop_offset_samples, dict):
+            # Check the max offset across all event types
+            max_stop_offset = max(trial_stop_offset_samples.values())
+            if stops[-1] + max_stop_offset > last_samp + 1:
+                raise ValueError(
+                    '"trial_stop_offset_samples" too large. Stop of last trial '
+                    f'({stops[-1]}) + max "trial_stop_offset_samples" '
+                    f"({max_stop_offset}) must be smaller than length of"
+                    f" recording ({len(ds)})."
+                )
+        else:
+            if stops[-1] + trial_stop_offset_samples > last_samp + 1:
+                raise ValueError(
+                    '"trial_stop_offset_samples" too large. Stop of last trial '
+                    f'({stops[-1]}) + "trial_stop_offset_samples" '
+                    f"({trial_stop_offset_samples}) must be smaller than length of"
+                    f" recording ({len(ds)})."
+                )
 
     if isinstance(trial_start_offset_samples, dict):
         # Per-event-type windowing: skip inference, group by event type
@@ -773,6 +774,8 @@ def _create_windows_from_events(
         for i_start, start in enumerate(starts)
     ]
     events = np.array(events)
+    if events.size == 0:
+        events = np.empty((0, 3), dtype=int)
 
     description = events[:, -1]
 

@@ -107,6 +107,32 @@ def check_forward_pass(model, input_sizes, only_check_until_dim=None):
         atol=1e-4,
         rtol=0,
     )
+    check_stress(model, input_sizes)
+
+
+def check_stress(model, input_sizes):
+    """Stress test the model with edge case inputs."""
+    model.eval()
+    # 1. Batch size 1 (checks for BatchNorm issues)
+    X_bs1 = torch.randn(1, input_sizes["n_channels"], input_sizes["n_in_times"])
+    try:
+        model(X_bs1)
+    except Exception as e:
+        pytest.fail(f"Model {model.__class__.__name__} failed with batch size 1: {e}")
+
+    # 2. NaNs (checks for stability, should not crash)
+    X_nan = X_bs1.clone()
+    X_nan[0, 0, 0] = float("nan")
+    model(X_nan)
+
+    # 3. Infs
+    X_inf = X_bs1.clone()
+    X_inf[0, 0, 0] = float("inf")
+    model(X_inf)
+
+    # 4. Zero-filled input
+    model(torch.zeros_like(X_bs1))
+
 
 def check_forward_pass_3d(model, input_sizes, only_check_until_dim=None):
     rng = np.random.RandomState(42)
@@ -126,6 +152,8 @@ def check_forward_pass_3d(model, input_sizes, only_check_until_dim=None):
         input_sizes["n_samples"],
         input_sizes["n_classes"],
     )
+    check_stress(model, input_sizes)
+
 
 
 def test_shallow_fbcsp_net(input_sizes):
@@ -3519,3 +3547,28 @@ def test_emg2qwerty_input_validation():
     # by ``floor((T - n_fft) / hop_length) + 1``.
     out = m_floor.compute_output_lengths(torch.tensor([10, 0, 50, 64, 80]))
     assert out.tolist() == [0, 0, 0, 1, 2]
+
+
+def test_models_extreme_dimensions():
+    """Test representative models with high channel counts and long sequences."""
+    # We pick a few representative models covering different architectural types
+    models_to_test = [
+        (ShallowFBCSPNet, dict(n_chans=512, n_outputs=2, n_times=1000)),
+        (Deep4Net, dict(n_chans=256, n_outputs=2, n_times=1000)),
+        (EEGNet, dict(n_chans=512, n_outputs=2, n_times=1000)),
+        (TCN, dict(n_chans=128, n_outputs=2, n_filters=10, n_blocks=2, kernel_size=4)),
+    ]
+    for model_cls, kwargs in models_to_test:
+        model = model_cls(**kwargs).eval()
+        n_chans = kwargs.get("in_chans", kwargs.get("n_chans"))
+        n_times = kwargs.get("input_window_samples", kwargs.get("n_times", 1000))
+        X = torch.randn(1, n_chans, n_times)
+        try:
+            model(X)
+        except Exception as e:
+            pytest.fail(f"Model {model_cls.__name__} failed with extreme dimensions: {e}")
+
+    # Test extremely long sequence on a light model
+    model = EEGNet(n_chans=32, n_outputs=2, n_times=20000).eval()
+    X_long = torch.randn(1, 32, 20000)
+    model(X_long)
