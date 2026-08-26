@@ -1067,6 +1067,22 @@ def test_filter_construction_clamping_keeps_parameter_storage_and_gradients():
     assert all(parameter.grad is not None for parameter in parameters)
 
 
+def test_traced_filter_runs_without_parameter_mutation():
+    """A traced filter must not replay eager parameter clamping."""
+    filter_layer = GeneralizedGaussianFilter(
+        in_channels=1,
+        out_channels=1,
+        sequence_length=128,
+        sample_rate=100.0,
+    ).eval()
+    input_tensor = torch.randn(2, 1, 128)
+    expected = filter_layer(input_tensor)
+
+    traced_filter = torch.jit.trace(filter_layer, input_tensor)
+
+    torch.testing.assert_close(traced_filter(input_tensor), expected)
+
+
 def test_forward_pass_output_shape():
     """
     Test that the forward pass returns the correct output shape.

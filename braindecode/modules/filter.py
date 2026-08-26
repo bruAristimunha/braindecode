@@ -649,7 +649,7 @@ class GeneralizedGaussianFilter(nn.Module):
         )
         shape = torch.clamp(self.shape.clone(), min=2.0, max=3.0)
 
-        if not torch.jit.is_scripting():
+        if not torch.jit.is_scripting() and not torch.jit.is_tracing():
             with torch.no_grad():
                 self.f_mean.copy_(f_mean)
                 self.bandwidth.copy_(bandwidth)
