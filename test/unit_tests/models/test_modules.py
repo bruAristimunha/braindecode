@@ -1041,6 +1041,32 @@ def test_filter_construction_clamping():
     assert shape_clamped >= 2.0, "shape should be clamped to a minimum of 2.0"
 
 
+def test_filter_construction_clamping_keeps_parameter_storage_and_gradients():
+    """Clamping updates parameters in place while keeping them differentiable."""
+    filter_layer = GeneralizedGaussianFilter(
+        in_channels=1,
+        out_channels=1,
+        sequence_length=256,
+        sample_rate=100.0,
+    )
+    with torch.no_grad():
+        filter_layer.f_mean.fill_(1.1)
+        filter_layer.bandwidth.fill_(0.001)
+        filter_layer.shape.fill_(1.5)
+
+    parameters = (
+        filter_layer.f_mean,
+        filter_layer.bandwidth,
+        filter_layer.shape,
+    )
+    data_ptrs = tuple(parameter.data_ptr() for parameter in parameters)
+
+    filter_layer.construct_filters().sum().backward()
+
+    assert tuple(parameter.data_ptr() for parameter in parameters) == data_ptrs
+    assert all(parameter.grad is not None for parameter in parameters)
+
+
 def test_forward_pass_output_shape():
     """
     Test that the forward pass returns the correct output shape.
