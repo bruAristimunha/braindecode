@@ -650,9 +650,10 @@ class GeneralizedGaussianFilter(nn.Module):
         shape = torch.clamp(self.shape, min=2.0, max=3.0)
 
         if not torch.jit.is_scripting():
-            self.f_mean.data = f_mean
-            self.bandwidth.data = bandwidth
-            self.shape.data = shape
+            with torch.no_grad():
+                self.f_mean.copy_(f_mean)
+                self.bandwidth.copy_(bandwidth)
+                self.shape.copy_(shape)
 
         # Create magnitude response with gain=1 -> (channels, freqs)
         mag_response = self.exponential_power(

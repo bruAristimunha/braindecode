@@ -2,6 +2,7 @@
 #          Sarthak Tayal <sarthaktayal2@gmail.com>
 #
 # License: BSD (3-clause)
+import inspect
 from unittest.mock import patch
 from warnings import catch_warnings, simplefilter
 
@@ -1039,6 +1040,13 @@ def test_filter_construction_clamping():
         "bandwidth should be clamped to a minimum of 1.0 Hz"
     )
     assert shape_clamped >= 2.0, "shape should be clamped to a minimum of 2.0"
+
+
+def test_filter_construction_does_not_assign_parameter_data():
+    """Parameter constraints must not replace device-managed tensor storage."""
+    source = inspect.getsource(GeneralizedGaussianFilter.construct_filters)
+
+    assert ".data =" not in source
 
 
 def test_forward_pass_output_shape():
