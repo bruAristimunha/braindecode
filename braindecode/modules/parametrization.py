@@ -35,4 +35,8 @@ class MaxNormParametrize(nn.Module):
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         # Renormalize each "row" (dim=0 slice) to have at most self.max_norm L2-norm
-        return X.renorm(p=2, dim=0, maxnorm=self.max_norm)
+        reduce_dims = tuple(range(1, X.ndim))
+        norm = torch.linalg.vector_norm(X, ord=2, dim=reduce_dims, keepdim=True)
+        denominator = norm.clamp_min(torch.finfo(norm.dtype).tiny)
+        scale = (self.max_norm / denominator).clamp(max=1.0)
+        return X * scale
