@@ -1049,6 +1049,27 @@ def test_filter_construction_does_not_assign_parameter_data():
     assert ".data =" not in source
 
 
+def test_filter_constraints_preserve_backward_parameter_versions():
+    """Constraining parameters must happen before autograd records their use."""
+    filter_layer = GeneralizedGaussianFilter(
+        in_channels=1,
+        out_channels=1,
+        sequence_length=64,
+        sample_rate=100.0,
+        inverse_fourier=False,
+        f_mean=(50.0,),
+        bandwidth=(0.5,),
+        shape=(1.5,),
+    )
+    output = filter_layer(torch.randn(2, 1, 64))
+
+    output.square().mean().backward()
+
+    assert filter_layer.f_mean.grad is not None
+    assert filter_layer.bandwidth.grad is not None
+    assert filter_layer.shape.grad is not None
+
+
 def test_forward_pass_output_shape():
     """
     Test that the forward pass returns the correct output shape.
