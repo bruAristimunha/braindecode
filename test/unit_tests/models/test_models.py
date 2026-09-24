@@ -2268,7 +2268,10 @@ def test_models_batch1_train_mode(
             module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.SyncBatchNorm)
         )
     ]
-    x = torch.randn(1, sp["n_chans"], sp["n_times"])
+    if model_name == "SleepFMStager":
+        x = torch.randn(1, sp["n_chans"], sp["n_times"], model.embed_dim)
+    else:
+        x = torch.randn(1, sp["n_chans"], sp["n_times"])
 
     # In train mode with batch_size=1, this must not raise.
     model.train()

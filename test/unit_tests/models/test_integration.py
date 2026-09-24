@@ -167,6 +167,22 @@ def get_epochs_y(signal_params=None, n_epochs=10):
     return epo, y
 
 
+def _make_model_input(model, batch_size=1, signal_params=None):
+    """Create the registered input shape, including embedding-input models."""
+    signal_params = signal_params or default_signal_params
+    try:
+        n_chans = model.n_chans
+    except ValueError:
+        n_chans = signal_params["n_chans"]
+    try:
+        n_times = model.n_times
+    except ValueError:
+        n_times = signal_params["n_times"]
+    if model.__class__.__name__ == "SleepFMStager":
+        return torch.randn(batch_size, n_chans, n_times, model.embed_dim)
+    return torch.randn(batch_size, n_chans, n_times)
+
+
 def test_completeness__models_test_cases():
     models_tested = set(x[0] for x in models_mandatory_parameters)
     all_models = set(all_models_dict.keys())
@@ -226,7 +242,12 @@ def test_model_integration(model_name, required_params, signal_params):
         # test initialisation:
         model = model_class(**model_kwargs)
         # test forward pass:
-        out = model(X)
+        model_input = (
+            _make_model_input(model, batch_size, sp)
+            if model_name == "SleepFMStager"
+            else X
+        )
+        out = model(model_input)
 
         # Skip the output shape test for non-classification models
         if model_name in non_classification_models:
@@ -481,16 +502,7 @@ def test_model_compiled(model):
             f"Skipping {model.__class__.__name__} as not working with torch.compile"
         )
 
-    # This assumes the model has attributes n_chans and n_times
-    try:
-        n_chans = model.n_chans
-    except ValueError:
-        n_chans = default_signal_params["n_chans"]
-    try:
-        n_times = model.n_times
-    except ValueError:
-        n_times = default_signal_params["n_times"]
-    input_tensor = torch.randn(1, n_chans, n_times)
+    input_tensor = _make_model_input(model)
     not_compiled_model = model
     compiled_model = torch.compile(model, mode="reduce-overhead", dynamic=False)
     torch.compiler.reset()
@@ -531,16 +543,7 @@ def test_model_exported(model):
         if model_name in not_exportable_models_py314:
             pytest.skip(f"{model_name} export is not compatible on Python 3.14+")
 
-    # example input matching your model's expected shape
-    try:
-        n_chans = model.n_chans
-    except ValueError:
-        n_chans = default_signal_params["n_chans"]
-    try:
-        n_times = model.n_times
-    except ValueError:
-        n_times = default_signal_params["n_times"]
-    example_input = torch.randn(1, n_chans, n_times)
+    example_input = _make_model_input(model)
 
     if any(isinstance(p, nn.UninitializedParameter) for p in model.parameters()):
         with torch.no_grad():
@@ -611,16 +614,7 @@ def test_model_torch_script(model):
     final_plain_model = convert_model_to_plain(model)
     final_plain_model.eval()
 
-    # example input matching your model's expected shape
-    try:
-        n_chans = model.n_chans
-    except ValueError:
-        n_chans = default_signal_params["n_chans"]
-    try:
-        n_times = model.n_times
-    except ValueError:
-        n_times = default_signal_params["n_times"]
-    input_tensor = torch.randn(1, n_chans, n_times)
+    input_tensor = _make_model_input(model)
 
     output_model = model(input_tensor)
     output_model_recreated = final_plain_model(input_tensor)
@@ -763,6 +757,8 @@ def test_if_models_with_embedding_parameter(model):
     # Test if the model that have embedding parameters works changing the default
     # embedding value
     model_name = model.__class__.__name__
+    if model_name == "SleepFMStager":
+        pytest.skip("SleepFMStager's embedding-input contract is tested directly.")
     # first step is to inspect the models parameters
     params = inspect.signature(model.__init__).parameters
 

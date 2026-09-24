@@ -364,6 +364,11 @@ models_mandatory_parameters: list[
     ),
     ("SleepStagerChambon2018", ["n_chans", "n_outputs", "n_times", "sfreq"], None),
     (
+        "SleepFMStager",
+        ["n_outputs"],
+        {"n_chans": 3, "n_times": 6},
+    ),
+    (
         "AttnSleep",
         ["n_outputs", "n_times", "sfreq"],
         {
@@ -523,6 +528,8 @@ models_mandatory_parameters: list[
 non_classification_models = [
     "SignalJEPA",
     "InterpolatedSignalJEPA",
+    # Emits token-wise logits (batch, sequence, n_outputs) from embeddings.
+    "SleepFMStager",
     # Emits a (batch, T_out, vocab) sequence for CTC, not class logits.
     "MetaNeuromotorHand",
     "EMG2QwertyNet",

@@ -28,6 +28,15 @@ Current 1.8.0 (GitHub)
 Enhancements
 ============
 
+- Add :class:`braindecode.models.SleepFMStager`, the released token-wise
+  sleep-staging head for precomputed SleepFM embeddings. It accepts the
+  authors' modality-by-sequence padding mask and strictly loads only the exact
+  official local 37-tensor staging checkpoint. The raw-signal base encoder,
+  unsupported trial-level classifier, and automatic checkpoint mirroring are
+  deliberately excluded. The derivative retains the upstream CC BY-NC 4.0
+  noncommercial terms.
+  (:gh:`1106` by `Fashad Ahmed`_)
+
 - Preserve the recording-local row of each canonical MNE annotation as
   ``i_trial_in_dataset`` in event-window metadata, keeping it aligned with
   targets and annotation extras through event mapping, duration filtering,
