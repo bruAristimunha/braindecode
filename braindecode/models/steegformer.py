@@ -56,6 +56,15 @@ def _channel_index() -> dict[str, int]:
     return {name.upper(): i for i, name in enumerate(_channel_order())}
 
 
+def _montage_1005_name() -> str:
+    """``colin27_1005`` on MNE >= 1.13 (which deprecates ``standard_1005``)."""
+    import mne
+
+    if "colin27_1005" in mne.channels.get_builtin_montages():
+        return "colin27_1005"
+    return "standard_1005"
+
+
 def _nearest_vocabulary_slots(
     chs_info: list[dict],
     slots: list[int | None],
@@ -88,7 +97,7 @@ def _nearest_vocabulary_slots(
             return None
         locations.append(loc)
 
-    standard = mne.channels.make_standard_montage("standard_1005")
+    standard = mne.channels.make_standard_montage(_montage_1005_name())
     positions = {
         name.upper(): xyz for name, xyz in standard.get_positions()["ch_pos"].items()
     }
