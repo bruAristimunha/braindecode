@@ -211,7 +211,7 @@ class _NeuroRVQEncoder(nn.Module):
         self.time_embed = nn.Parameter(torch.zeros(max_patches, embed_dim))
         self.pos_drop = nn.Dropout(drop_prob)
         drop_paths = torch.linspace(0, drop_path_rate, depth).tolist()
-        qk_norm = lambda dim: nn.LayerNorm(dim, eps=1e-6)
+        qk_norm = nn.LayerNorm  # LaBraM attention adds eps=1e-6
         self.blocks = nn.ModuleList(
             [
                 _Block(
@@ -284,7 +284,7 @@ class _NeuroRVQDecoder(nn.Module):
         self.time_embed = nn.Parameter(torch.zeros(max_patches, embed_dim))
         self.pos_drop = nn.Dropout(drop_prob)
         drop_paths = torch.linspace(0, drop_path_rate, depth).tolist()
-        qk_norm = lambda dim: nn.LayerNorm(dim, eps=1e-6)
+        qk_norm = nn.LayerNorm  # LaBraM attention adds eps=1e-6
         self.blocks = nn.ModuleList(
             [
                 _Block(

@@ -9,8 +9,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor, nn
+
+from braindecode.models.labram import _Attention
+from braindecode.modules import DropPath
 
 NEURORVQ_CHANNELS = (
     "a1",
@@ -120,25 +122,6 @@ NEURORVQ_CHANNELS = (
 )
 
 
-def _drop_path(x: Tensor, drop_prob: float, training: bool) -> Tensor:
-    if drop_prob == 0.0 or not training:
-        return x
-    keep_prob = 1.0 - drop_prob
-    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
-    random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
-    random_tensor.floor_()
-    return x.div(keep_prob) * random_tensor
-
-
-class _DropPath(nn.Module):
-    def __init__(self, drop_prob: float):
-        super().__init__()
-        self.drop_prob = drop_prob
-
-    def forward(self, x: Tensor) -> Tensor:
-        return _drop_path(x, self.drop_prob, self.training)
-
-
 class _Mlp(nn.Module):
     def __init__(self, dim: int, hidden_dim: int, drop: float):
         super().__init__()
@@ -149,49 +132,6 @@ class _Mlp(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return self.drop(self.fc2(self.drop(self.act(self.fc1(x)))))
-
-
-class _Attention(nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int,
-        qkv_bias: bool,
-        qk_norm: Callable[[int], nn.Module] | None,
-        attn_drop: float,
-        proj_drop: float,
-    ):
-        super().__init__()
-        self.num_heads = num_heads
-        head_dim = dim // num_heads
-        inner_dim = head_dim * num_heads
-        self.scale = head_dim**-0.5
-        self.qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-        self.q_bias = nn.Parameter(torch.zeros(inner_dim)) if qkv_bias else None
-        self.v_bias = nn.Parameter(torch.zeros(inner_dim)) if qkv_bias else None
-        self.q_norm = qk_norm(head_dim) if qk_norm is not None else None
-        self.k_norm = qk_norm(head_dim) if qk_norm is not None else None
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(inner_dim, dim)
-        self.proj_drop = nn.Dropout(proj_drop)
-
-    def forward(self, x: Tensor) -> Tensor:
-        batch, seq_len, _ = x.shape
-        qkv_bias = None
-        if self.q_bias is not None:
-            qkv_bias = torch.cat(
-                (self.q_bias, torch.zeros_like(self.v_bias), self.v_bias)
-            )
-        qkv = F.linear(x, self.qkv.weight, qkv_bias)
-        qkv = qkv.reshape(batch, seq_len, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)
-        if self.q_norm is not None and self.k_norm is not None:
-            q = self.q_norm(q).type_as(v)
-            k = self.k_norm(k).type_as(v)
-        attn = ((q * self.scale) @ k.transpose(-2, -1)).softmax(dim=-1)
-        attn = self.attn_drop(attn)
-        x = (attn @ v).transpose(1, 2).reshape(batch, seq_len, -1)
-        return self.proj_drop(self.proj(x))
 
 
 class _Block(nn.Module):
@@ -209,8 +149,15 @@ class _Block(nn.Module):
     ):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
-        self.attn = _Attention(dim, num_heads, qkv_bias, qk_norm, attn_drop, drop)
-        self.drop_path = _DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
+        self.attn = _Attention(
+            dim,
+            num_heads=num_heads,
+            qkv_bias=qkv_bias,
+            qk_norm=qk_norm,
+            attn_drop=attn_drop,
+            proj_drop=drop,
+        )
+        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.norm2 = nn.LayerNorm(dim)
         self.mlp = _Mlp(dim, int(dim * mlp_ratio), drop)
         self.gamma_1 = (
