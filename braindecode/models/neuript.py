@@ -12,6 +12,7 @@ benchmark reproduction.
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -263,8 +264,10 @@ class NeurIPT(EEGModuleMixin, nn.Module, license="bsd-3-clause"):
         Temporal merge factor before each layer; defaults to the paper schedule
         ``(1, 4, 1, 2, 1, 2)`` truncated or extended with ones.
     n_experts : sequence of int | None
-        Expert count per layer, matching the paper schedule ``(0, 2, 2, 4, 4,
-        6)`` by default. A zero means only the shared expert is active.
+        Expert count per layer. The default ``(0, 2, 2, 4, 4, 6)`` is the
+        pre-training schedule of the paper's Table 13; the paper's ablations
+        (Tables 3, 4 and 6) use ``(0, 0, 2, 4, 4, 6)``. A zero means only the
+        shared expert is active.
     expert_hidden_dim : int, default=128
         Hidden width of each routed expert. The paper's reported configuration
         uses 512.
@@ -276,15 +279,26 @@ class NeurIPT(EEGModuleMixin, nn.Module, license="bsd-3-clause"):
         Optional Braindecode-compatible alias for ``dropout``. When provided,
         it overrides ``dropout``.
     channel_positions : Tensor | sequence | None
-        Optional ``(n_chans, 3)`` electrode coordinates. If omitted, channel
-        coordinates are read from ``chs_info``; when unavailable, spatial
-        encodings are zero and the model does not claim montage transfer.
+        Optional ``(n_chans, 3)`` electrode coordinates in metres (MNE
+        convention). If omitted, channel coordinates are read from
+        ``chs_info``. For bipolar channels pass e.g. the midpoint of the two
+        electrodes. When no coordinates are available, a warning is raised and
+        the 3D electrode encoding is constant across channels.
+    position_scale : float, default=1000.0
+        Factor applied to the coordinates before the sinusoidal 3D encoding.
+        The default converts metres to millimetres, so the encoding spans a
+        range comparable to integer token positions.
+    n_head_layers : int, default=2
+        Number of linear layers in the classifier. The paper uses "a
+        multilayer perceptron as the classifier" on the IILP features; hidden
+        layers have width ``d_model`` and use ``activation`` and ``dropout``.
+        ``1`` gives a single linear layer.
     lobe_groups : sequence of sequences of int | None
         Channel indices for each IILP region. If omitted, one global region is
         used; supply anatomical groups to enable explicit inter-lobe features.
     activation : nn.Module class, default=nn.GELU
-        Retained for the standard Braindecode constructor contract. The paper
-        uses SwiGLU in its transformer feed-forward blocks.
+        Activation of the hidden classifier layers. The transformer
+        feed-forward blocks always use SwiGLU, as in the paper.
     """
 
     def __init__(
@@ -307,6 +321,8 @@ class NeurIPT(EEGModuleMixin, nn.Module, license="bsd-3-clause"):
         channel_positions: Tensor | Sequence[Sequence[float]] | None = None,
         lobe_groups: Sequence[Sequence[int]] | None = None,
         activation: type[nn.Module] = nn.GELU,
+        position_scale: float = 1000.0,
+        n_head_layers: int = 2,
     ):
         super().__init__(
             n_outputs=n_outputs,
@@ -316,7 +332,8 @@ class NeurIPT(EEGModuleMixin, nn.Module, license="bsd-3-clause"):
             input_window_seconds=input_window_seconds,
             sfreq=sfreq,
         )
-        del activation  # The published backbone uses SwiGLU, not GELU.
+        if n_head_layers < 1:
+            raise ValueError("n_head_layers must be at least 1.")
         if drop_prob is not None:
             dropout = drop_prob
         if not 0.0 <= dropout <= 1.0:
@@ -350,7 +367,16 @@ class NeurIPT(EEGModuleMixin, nn.Module, license="bsd-3-clause"):
 
         self.input_projection = nn.Linear(1, d_model)
         positions = self._resolve_channel_positions(channel_positions, chs_info)
-        self.register_buffer("channel_coordinates", positions, persistent=True)
+        if not positions.abs().sum(dim=1).gt(0).all():
+            warnings.warn(
+                "NeurIPT: some channels have no electrode coordinates; their 3D "
+                "electrode encoding is constant. Pass `channel_positions` or "
+                "`chs_info` with `loc` set to enable the paper's 3D encoding.",
+                UserWarning,
+            )
+        self.register_buffer(
+            "channel_coordinates", positions * position_scale, persistent=True
+        )
         self.layers = nn.ModuleList()
         self.mergers = nn.ModuleList()
         for factor, expert_count in zip(self.merge_factors, self.n_experts_per_layer):
@@ -369,6 +395,11 @@ class NeurIPT(EEGModuleMixin, nn.Module, license="bsd-3-clause"):
             )
         self.lobe_groups = self._resolve_lobe_groups(lobe_groups)
         feature_dim = n_layers * len(self.lobe_groups) * d_model
+        head: list[nn.Module] = []
+        for _ in range(n_head_layers - 1):
+            head += [nn.Linear(feature_dim, d_model), activation(), nn.Dropout(dropout)]
+            feature_dim = d_model
+        self.head = nn.Sequential(*head)
         self.final_layer = nn.Linear(feature_dim, n_outputs)
         self._init_weights()
 
@@ -474,7 +505,7 @@ class NeurIPT(EEGModuleMixin, nn.Module, license="bsd-3-clause"):
     def forward(self, x: Tensor, return_features: bool = False):
         """Compute classification logits, optionally returning IILP features."""
         features, auxiliary_loss = self.forward_features(x)
-        logits = self.final_layer(features)
+        logits = self.final_layer(self.head(features))
         if return_features:
             return {"logits": logits, "features": features, "aux_loss": auxiliary_loss}
         return logits
