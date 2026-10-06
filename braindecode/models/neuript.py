@@ -436,10 +436,19 @@ class NeurIPT(EEGModuleMixin, nn.Module, license="bsd-3-clause"):
         return groups
 
     def _init_weights(self) -> None:
-        nn.init.xavier_uniform_(self.input_projection.weight)
-        nn.init.zeros_(self.input_projection.bias)
-        nn.init.xavier_uniform_(self.final_layer.weight)
-        nn.init.zeros_(self.final_layer.bias)
+        # Paper Table 13: "Weights init: Kaiming normalization". With fan_in = 1,
+        # the single-point input projection then has std sqrt(2), so the EEG
+        # signal is not drowned by the unit-amplitude sinusoidal encodings
+        # (Xavier gives std ~sqrt(2 / d_model) and near-constant features).
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.kaiming_normal_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.MultiheadAttention):
+                nn.init.kaiming_normal_(module.in_proj_weight)
+                if module.in_proj_bias is not None:
+                    nn.init.zeros_(module.in_proj_bias)
 
     def position_encodings(self, x: Tensor) -> tuple[Tensor, Tensor]:
         n_times = x.shape[-1]
