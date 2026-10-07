@@ -1,0 +1,60 @@
+name: diag-disk
+on:
+  push:
+    branches:
+      - "w41/fix-ci-disk-diag*"
+env:
+  TEST_EXTRAS: tests,moabb,hub,eegprep,typing,viz
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - uses: actions/checkout@v4
+    - name: Disk at start
+      run: |
+        df -h /c /d || true
+        echo "TEMP=$TEMP RUNNER_TEMP=$RUNNER_TEMP HOME=$HOME"
+    - uses: actions/cache@v4
+      with:
+        path: ~/mne_data
+        key: test-2-${{ runner.os }}-${{ matrix.python-version }}
+        restore-keys: |
+          test-2-${{ runner.os }}-
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - uses: astral-sh/setup-uv@v7
+      with:
+        version: latest
+        enable-cache: true
+        cache-dependency-glob: "**/pyproject.toml"
+    - name: Install
+      env:
+        UV_TORCH_BACKEND: cpu
+      run: uv pip install --system -e ".[${{ env.TEST_EXTRAS }}]"
+    - name: Disk after install
+      run: |
+        df -h /c /d
+        du -sh "$(python -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')" ~/mne_data "$(uv cache dir)" 2>/dev/null || true
+    - name: Materialize MOABB data
+      run: python -c "from moabb.datasets import BNCI2014_001; BNCI2014_001().get_data([1, 2, 4])"
+    - name: Tests with disk monitor
+      env:
+        HF_TOKEN_REVE: ${{ secrets.HF_TOKEN_REVE }}
+      run: |
+        ( while true; do echo "DISKMON $(date +%T) $(df -k /c | tail -1 | awk '{print $4}')KB_free_C pytest_tmp=$(du -sk "$TEMP/pytest-of-$USERNAME" 2>/dev/null | cut -f1)KB hf=$(du -sk ~/.cache/huggingface 2>/dev/null | cut -f1)KB torch=$(du -sk ~/.cache/torch 2>/dev/null | cut -f1)KB temp=$(du -sk "$TEMP" 2>/dev/null | cut -f1)KB"; sleep 30; done ) &
+        pytest -q -n auto --dist worksteal test/ -p no:cacheprovider || true
+        kill %1 || true
+    - name: Disk after tests
+      if: always()
+      run: |
+        df -h /c /d
+        du -sk "$TEMP"/* ~/.cache/* 2>/dev/null | sort -rn | head -25
+        du -sk "$TEMP"/pytest-of-*/pytest-*/* 2>/dev/null | sort -rn | head -40
