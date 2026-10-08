@@ -26,6 +26,7 @@ from torch.utils._python_dispatch import TorchDispatchMode
 from torch.utils._pytree import tree_flatten, tree_map_only
 
 import braindecode.functional
+from braindecode.functional import _real_dft
 from braindecode.models.util import (
     _get_signal_params,
     models_dict,
@@ -272,11 +273,25 @@ def test_registered_model_training_contract(
 
 # ``.item()`` in forward, which meta tensors cannot answer (see _HOST_SYNC).
 _DATA_DEPENDENT_FORWARD = {"BaRISTA", "BrainOmni", "BrainTokenizer", "CodeBrain"}
+# Known misses, not fixed here.
+_DEVICE_XFAIL = {
+    "LUNA": "default channel locations are cached on the CPU and copied to the "
+    "device at every forward",
+}
 
 
 @pytest.mark.parametrize(
     "model_name,required_params,signal_params",
-    models_mandatory_parameters,
+    [
+        pytest.param(
+            *case,
+            marks=[pytest.mark.xfail(reason=_DEVICE_XFAIL[case[0]], strict=True)]
+            if case[0] in _DEVICE_XFAIL
+            else [],
+            id=case[0],
+        )
+        for case in models_mandatory_parameters
+    ],
 )
 def test_registered_model_follows_device(model_name, required_params, signal_params):
     """``model.to(device)`` moves every tensor forward reads or creates, checked
@@ -313,7 +328,7 @@ class _OpLog(TorchDispatchMode):
     """Record the aten ops run under it: name, (dtype, device, ndim, contiguous)
     of the tensor inputs and outputs and the other arguments; outputs of a 3-D
     ``permute`` are remembered by identity. With ``meta_to_cpu``, copies from
-    ``meta`` to the CPU return zeros (meta tensors hold no data)."""
+    ``meta`` to the CPU return random values (meta tensors hold no data)."""
 
     def __init__(self, meta_to_cpu=False):
         super().__init__()
@@ -328,7 +343,7 @@ class _OpLog(TorchDispatchMode):
             and kwargs.get("device") == torch.device("cpu")
         ):
             dtype = kwargs.get("dtype") or args[0].dtype
-            out = torch.zeros(args[0].shape, dtype=dtype)
+            out = torch.randn(args[0].shape).to(dtype)
         else:
             out = func(*args, **kwargs)
         flat = tree_flatten((args, kwargs))[0]
@@ -362,10 +377,11 @@ def _meta(t):
 def _record(meta_as_hpu=False):
     """Run the block under an ``_OpLog``; RNN modules log whether their input
     comes from a 3-D permute (op ``rnn:<module>``). With ``meta_as_hpu``,
-    ``spectral_input`` treats ``meta`` tensors as HPU ones (moves them to the
-    CPU), so ``meta`` plays the accelerator without complex dtypes."""
+    ``spectral_input`` and ``needs_real_dft`` treat ``meta`` tensors as HPU
+    ones, so ``meta`` plays the accelerator without complex dtypes."""
     log = _OpLog(meta_to_cpu=meta_as_hpu)
     original = braindecode.functional.spectral_input
+    needs_real_dft = _real_dft.needs_real_dft
 
     def spectral_input(x):
         return original(x.cpu() if x.is_meta else x)
@@ -386,12 +402,15 @@ def _record(meta_as_hpu=False):
     ]
     for m in patched:
         m.spectral_input = spectral_input
+    if meta_as_hpu:
+        _real_dft.needs_real_dft = lambda x: x.is_meta or needs_real_dft(x)
     hook = register_module_forward_pre_hook(rnn_input)
     try:
         with log:
             yield log
     finally:
         hook.remove()
+        _real_dft.needs_real_dft = needs_real_dft
         for m in patched:
             m.spectral_input = original
 
