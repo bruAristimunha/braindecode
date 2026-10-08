@@ -170,4 +170,5 @@ markers = [
     "network: tests that require network access",
     "huggingface: tests that access Hugging Face Hub",
     "slow: slow tests",
+    "hpu: needs a Gaudi HPU (habana_frameworks); skipped elsewhere",
 ]
