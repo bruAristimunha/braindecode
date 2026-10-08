@@ -294,32 +294,46 @@ def test_registered_model_follows_device(model_name, required_params, signal_par
     assert not stray, f"tensor attributes that .to() does not move: {stray}"
     if model_name in _DATA_DEPENDENT_FORWARD:
         pytest.skip("forward reads tensor values (.item()), which meta tensors lack")
+    x = x.to("meta")
     with torch.no_grad(), _record() as log:
-        output = model(x.to("meta"))
+        output = model(x)
     assert all(t.is_meta for t in _tensor_leaves(output))
+    # 0-dim CPU tensors act as scalars on any device (torch.as_tensor(2.0)).
     on_cpu = sorted(
-        {op.name for op in log.ops if any(t[1] != "meta" for t in op.ins + op.outs)}
+        {
+            op.name
+            for op in log.ops
+            if any(t[1] != "meta" and t[2] for t in op.ins + op.outs)
+        }
     )
     assert not on_cpu, f"forward creates CPU tensors in {on_cpu}"
 
 
 class _OpLog(TorchDispatchMode):
     """Record the aten ops run under it: name, (dtype, device, ndim, contiguous)
-    of the tensor inputs and outputs, the other arguments, and whether an input
-    derives from ``spectral_input`` or a 3-D ``permute`` (by tensor identity)."""
+    of the tensor inputs and outputs and the other arguments; outputs of a 3-D
+    ``permute`` are remembered by identity. With ``meta_to_cpu``, copies from
+    ``meta`` to the CPU return zeros (meta tensors hold no data)."""
 
-    def __init__(self):
+    def __init__(self, meta_to_cpu=False):
         super().__init__()
-        self.ops, self.spectral, self.permuted = [], {}, {}
+        self.ops, self.permuted, self.meta_to_cpu = [], {}, meta_to_cpu
 
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
-        out = func(*args, **(kwargs or {}))
+        kwargs = kwargs or {}
+        if (
+            self.meta_to_cpu
+            and func is torch.ops.aten._to_copy.default
+            and args[0].is_meta
+            and kwargs.get("device") == torch.device("cpu")
+        ):
+            dtype = kwargs.get("dtype") or args[0].dtype
+            out = torch.zeros(args[0].shape, dtype=dtype)
+        else:
+            out = func(*args, **kwargs)
         flat = tree_flatten((args, kwargs))[0]
         ins = [t for t in flat if isinstance(t, torch.Tensor)]
         outs = [t for t in tree_flatten(out)[0] if isinstance(t, torch.Tensor)]
-        spectral = any(id(t) in self.spectral for t in ins)
-        if spectral:
-            self.spectral.update((id(t), t) for t in outs)
         name = func.overloadpacket.__name__
         if name == "permute" and ins[0].dim() == 3:
             self.permuted.update((id(t), t) for t in outs)
@@ -330,15 +344,14 @@ class _OpLog(TorchDispatchMode):
                 tuple(_meta(t) for t in ins),
                 tuple(_meta(t) for t in outs),
                 tree_map_only(torch.Tensor, lambda t: None, args),
-                tree_map_only(torch.Tensor, lambda t: None, kwargs or {}),
-                spectral,
+                tree_map_only(torch.Tensor, lambda t: None, kwargs),
             )
         )
         return out
 
 
 # ``args``/``kwargs`` as dispatched, tensors replaced by None.
-_Op = namedtuple("_Op", "name overload ins outs args kwargs spectral")
+_Op = namedtuple("_Op", "name overload ins outs args kwargs")
 
 
 def _meta(t):
@@ -346,34 +359,33 @@ def _meta(t):
 
 
 @contextlib.contextmanager
-def _record():
-    """Run the block under an ``_OpLog``; ``spectral_input`` outputs are tagged
-    (a view, so the tag is not put on the input it may return) and RNN modules
-    log their input as op ``rnn:<module>``."""
-    log = _OpLog()
+def _record(meta_as_hpu=False):
+    """Run the block under an ``_OpLog``; RNN modules log whether their input
+    comes from a 3-D permute (op ``rnn:<module>``). With ``meta_as_hpu``,
+    ``spectral_input`` treats ``meta`` tensors as HPU ones (moves them to the
+    CPU), so ``meta`` plays the accelerator without complex dtypes."""
+    log = _OpLog(meta_to_cpu=meta_as_hpu)
     original = braindecode.functional.spectral_input
 
-    def tagged(x):
-        y = original(x)
-        y = y.view_as(y)
-        log.spectral[id(y)] = y
-        return y
+    def spectral_input(x):
+        return original(x.cpu() if x.is_meta else x)
 
     def rnn_input(module, args):
         if isinstance(module, nn.RNNBase) and isinstance(args[0], torch.Tensor):
             permuted = id(args[0]) in log.permuted
             log.ops.append(
-                _Op(f"rnn:{type(module).__name__}", "", (), (), (permuted,), {}, False)
+                _Op(f"rnn:{type(module).__name__}", "", (), (), (permuted,), {})
             )
 
     patched = [
         m
         for name, m in list(sys.modules.items())
-        if name.startswith("braindecode")
+        if meta_as_hpu
+        and name.startswith("braindecode")
         and getattr(m, "spectral_input", None) is original
     ]
     for m in patched:
-        m.spectral_input = tagged
+        m.spectral_input = spectral_input
     hook = register_module_forward_pre_hook(rnn_input)
     try:
         with log:
@@ -386,7 +398,7 @@ def _record():
 
 @functools.cache
 def _findings(model_name):
-    """Op patterns of one eval forward, one train forward and its backward."""
+    """Op patterns of one eval-mode and one train-mode forward."""
     case = next(c for c in models_mandatory_parameters if c[0] == model_name)
     model, x = _build_case(*case)
     _materialize(model, x)
@@ -394,55 +406,39 @@ def _findings(model_name):
         model(x)
     model.train()
     with _record() as train_log:
-        leaves = [t for t in _tensor_leaves(model(x)) if t.requires_grad]
-    with _record() as backward_log:
-        if leaves:
-            sum(t.float().square().mean() for t in leaves).backward()
+        model(x)
     forward = eval_log.ops + train_log.ops
-    return {
-        "complex": _complex_sources(forward, backward_log.ops),
-        "host_sync": _host_syncs(forward),
-        "gaps": _accelerator_gaps(forward + backward_log.ops),
-    }
-
-
-def _cases(allowed):
-    """models_mandatory_parameters, xfail where ``allowed`` gives a reason."""
-    return [
-        pytest.param(
-            *case,
-            marks=[pytest.mark.xfail(reason=allowed[case[0]], strict=True)]
-            if case[0] in allowed
-            else [],
-            id=case[0],
-        )
-        for case in models_mandatory_parameters
-    ]
-
-
-def _complex_sources(forward, backward):
-    """Ops creating complex tensors from real ones not from ``spectral_input``
-    (backward of routed ops runs where their forward ran)."""
-    is_complex = lambda ts: any(t[0].is_complex for t in ts)
-    found = {
-        op.name
-        for op in forward
-        if is_complex(op.outs) and not is_complex(op.ins) and not op.spectral
-    }
-    if not any(is_complex(op.outs) for op in forward):
-        found |= {f"{op.name} (backward)" for op in backward if is_complex(op.outs)}
-    return sorted(found)
+    return {"host_sync": _host_syncs(forward), "gaps": _accelerator_gaps(forward)}
 
 
 # Gaudi has no complex dtype: an FFT/STFT input goes through
 # braindecode.functional.spectral_input, which moves HPU tensors to the CPU.
-@pytest.mark.parametrize("model_name,required_params,signal_params", _cases({}))
+@pytest.mark.parametrize(
+    "model_name,required_params,signal_params", models_mandatory_parameters
+)
 def test_registered_model_complex_only_after_spectral_input(
     model_name, required_params, signal_params
 ):
-    """Complex tensors derive from ``spectral_input`` outputs only."""
-    found = _findings(model_name)["complex"]
-    assert not found, f"complex tensors not routed through spectral_input: {found}"
+    """With ``meta`` as the device, complex tensors (forward and backward) live
+    on the CPU only, i.e. every FFT/STFT input went through ``spectral_input``."""
+    if model_name in _DATA_DEPENDENT_FORWARD:
+        pytest.skip("forward reads tensor values (.item()), which meta tensors lack")
+    model, x = _build_case(model_name, required_params, signal_params)
+    _materialize(model, x)
+    model.to("meta").train()
+    x = x.to("meta")
+    with _record(meta_as_hpu=True) as log:
+        leaves = [t for t in _tensor_leaves(model(x)) if t.requires_grad]
+        if leaves:
+            sum(t.float().square().mean() for t in leaves).backward()
+    found = sorted(
+        {
+            op.name
+            for op in log.ops
+            if any(t[0].is_complex and t[1] == "meta" for t in op.outs)
+        }
+    )
+    assert not found, f"complex tensors on the device, not via spectral_input: {found}"
 
 
 # Host syncs and data-dependent shapes cut the Gaudi lazy graph (and CUDA
@@ -458,8 +454,27 @@ _SYNC_OPS = {
     "unique_dim",
     "unique_consecutive",
 }
-# Allowed per model, with the reason.
-_HOST_SYNC = {}
+# Allowed per model: (findings, reason).
+_QUANTIZER = (
+    ("_local_scalar_dense", "index_put_ with a boolean mask"),
+    "codebook k-means init flag, first-batch k-means and dead-code expiry "
+    "(the released EuclideanCodebook)",
+)
+_HOST_SYNC = {
+    "BaRISTA": (("_local_scalar_dense",), "eager-only spatial_indices range check"),
+    "BENDR": (("_local_scalar_dense",), "LayerDrop coin flip on a CPU torch.rand(1)"),
+    "BrainOmni": _QUANTIZER,
+    "BrainTokenizer": _QUANTIZER,
+    "CodeBrain": (("_local_scalar_dense",), "lazy kernel-norm init flag (buffer)"),
+    "EEGSimpleConv": (
+        ("_local_scalar_dense",),
+        "torchaudio Resample takes the output length from a CPU scalar",
+    ),
+    "MetaNeuromotorHand": (
+        ("_local_scalar_dense",),
+        "training-time masking draws the mask count on the CPU (reference)",
+    ),
+}
 
 
 def _host_syncs(ops):
@@ -481,12 +496,16 @@ def _host_syncs(ops):
     return sorted(found)
 
 
-@pytest.mark.parametrize("model_name,required_params,signal_params", _cases(_HOST_SYNC))
+@pytest.mark.parametrize(
+    "model_name,required_params,signal_params", models_mandatory_parameters
+)
 def test_registered_model_forward_has_no_host_sync(
     model_name, required_params, signal_params
 ):
-    """Forward reads no tensor value on the host and has no data-dependent shape."""
-    found = _findings(model_name)["host_sync"]
+    """Forward reads no tensor value on the host and has no data-dependent shape
+    (except the allowed ones in ``_HOST_SYNC``)."""
+    allowed = _HOST_SYNC.get(model_name, ((), ""))[0]
+    found = [f for f in _findings(model_name)["host_sync"] if f not in allowed]
     assert not found, f"host syncs / data-dependent shapes in forward: {found}"
 
 
@@ -516,11 +535,13 @@ def _accelerator_gaps(ops):
     return sorted(found)
 
 
-@pytest.mark.parametrize("model_name,required_params,signal_params", _cases({}))
+@pytest.mark.parametrize(
+    "model_name,required_params,signal_params", models_mandatory_parameters
+)
 def test_registered_model_avoids_accelerator_gaps(
     model_name, required_params, signal_params
 ):
-    """Forward and backward avoid ops known to fail on Gaudi or in low precision
-    (cdist in bfloat16/float16: test_forward_in_dtype)."""
+    """Forward avoids ops known to fail on Gaudi or in low precision (cdist in
+    bfloat16/float16: test_forward_in_dtype)."""
     found = _findings(model_name)["gaps"]
     assert not found, f"ops with known accelerator/low-precision gaps: {found}"

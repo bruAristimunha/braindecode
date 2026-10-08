@@ -864,9 +864,14 @@ def test_forward_in_dtype(model_name, dtype):
         assert all(t[0] != dtype for op in cdist for t in op.ins)
         return
     # Every floating tensor follows the model dtype: a float32 one comes from
-    # torch.zeros/full/tensor without dtype= or a hard-coded .float().
+    # torch.zeros/full/tensor without dtype= or a hard-coded .float() (0-dim
+    # ones do not lower the dtype of the tensors they meet).
     float32 = sorted(
-        {op.name for op in log.ops if any(t[0] == torch.float32 for t in op.outs)}
+        {
+            op.name
+            for op in log.ops
+            if any(t[0] == torch.float32 and t[2] for t in op.outs)
+        }
     )
     assert not float32, f"float32 tensors in a float64 forward: {float32}"
     y.float().square().mean().backward()

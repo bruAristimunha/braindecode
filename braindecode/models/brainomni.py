@@ -664,7 +664,8 @@ class _RotaryPositionalEmbedding(nn.Module):
         rotate = rotate[:seq].repeat_interleave(2, dim=1)
         rotate = rearrange(rotate, "s (h d) two -> s h d two", h=heads)
         cos, sin = rotate[..., 0], rotate[..., 1]
-        q_float, k_float = q.float(), k.float()
+        work = torch.promote_types(q.dtype, torch.float32)
+        q_float, k_float = q.to(work), k.to(work)
         q_out = q_float * cos + rotate_pairs(q_float) * sin
         k_out = k_float * cos + rotate_pairs(k_float) * sin
         return q_out.type_as(q), k_out.type_as(k)
