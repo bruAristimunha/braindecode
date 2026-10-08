@@ -381,7 +381,7 @@ def _record(meta_as_hpu=False):
     ones, so ``meta`` plays the accelerator without complex dtypes."""
     log = _OpLog(meta_to_cpu=meta_as_hpu)
     original = braindecode.functional.spectral_input
-    needs_real_dft = _real_dft.needs_real_dft
+    needs_real_dft, autocast = _real_dft.needs_real_dft, torch.autocast
 
     def spectral_input(x):
         return original(x.cpu() if x.is_meta else x)
@@ -404,13 +404,17 @@ def _record(meta_as_hpu=False):
         m.spectral_input = spectral_input
     if meta_as_hpu:
         _real_dft.needs_real_dft = lambda x: x.is_meta or needs_real_dft(x)
+        # autocast has no meta device (the real-DFT path disables autocast)
+        torch.autocast = lambda device_type, **kw: (  # noqa: E731
+            contextlib.nullcontext() if device_type == "meta" else autocast(device_type, **kw)
+        )
     hook = register_module_forward_pre_hook(rnn_input)
     try:
         with log:
             yield log
     finally:
         hook.remove()
-        _real_dft.needs_real_dft = needs_real_dft
+        _real_dft.needs_real_dft, torch.autocast = needs_real_dft, autocast
         for m in patched:
             m.spectral_input = original
 
