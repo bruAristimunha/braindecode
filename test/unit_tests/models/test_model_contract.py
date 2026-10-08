@@ -7,19 +7,25 @@ models_mandatory_parameters; no per-model test opt-in is required.
 
 from __future__ import annotations
 
+import contextlib
 import copy
-import importlib.util
+import functools
 import json
-import os
 import pickle
 import re
+import sys
+from collections import namedtuple
 from collections.abc import Mapping, Sequence
 
 import pytest
 import torch
 from torch import nn
+from torch.nn.modules.module import register_module_forward_pre_hook
 from torch.nn.utils import parametrize
+from torch.utils._python_dispatch import TorchDispatchMode
+from torch.utils._pytree import tree_flatten, tree_map_only
 
+import braindecode.functional
 from braindecode.models.util import (
     _get_signal_params,
     models_dict,
@@ -264,6 +270,7 @@ def test_registered_model_training_contract(
     assert all(torch.isfinite(t).all() for t in actual if t.is_floating_point())
 
 
+# ``.item()`` in forward, which meta tensors cannot answer (see _HOST_SYNC).
 _DATA_DEPENDENT_FORWARD = {"BaRISTA", "BrainOmni", "BrainTokenizer", "CodeBrain"}
 
 
@@ -272,7 +279,9 @@ _DATA_DEPENDENT_FORWARD = {"BaRISTA", "BrainOmni", "BrainTokenizer", "CodeBrain"
     models_mandatory_parameters,
 )
 def test_registered_model_follows_device(model_name, required_params, signal_params):
-    """``model.to(device)`` moves every tensor forward reads (checked on ``meta``)."""
+    """``model.to(device)`` moves every tensor forward reads or creates, checked
+    on ``meta``: a CPU tensor in forward is a buffer kept as a plain attribute
+    or a ``torch.zeros``/``arange``/``tensor`` without ``device=``."""
     model, x = _build_case(model_name, required_params, signal_params)
     _materialize(model, x)
     model.to("meta")
@@ -285,57 +294,233 @@ def test_registered_model_follows_device(model_name, required_params, signal_par
     assert not stray, f"tensor attributes that .to() does not move: {stray}"
     if model_name in _DATA_DEPENDENT_FORWARD:
         pytest.skip("forward reads tensor values (.item()), which meta tensors lack")
-    with torch.no_grad():
+    with torch.no_grad(), _record() as log:
         output = model(x.to("meta"))
     assert all(t.is_meta for t in _tensor_leaves(output))
+    on_cpu = sorted(
+        {op.name for op in log.ops if any(t[1] != "meta" for t in op.ins + op.outs)}
+    )
+    assert not on_cpu, f"forward creates CPU tensors in {on_cpu}"
 
 
-# Gaudi (habana_frameworks); run with ``pytest -m hpu`` on a Gaudi host, once
-# with PT_HPU_LAZY_MODE=1 (lazy, the default) and once with 0 (eager).
-_HPU_MODE = "eager" if os.environ.get("PT_HPU_LAZY_MODE") == "0" else "lazy"
-# Gaudi software 1.21 (Synapse) failures with no portable equivalent op; the
-# same models run on CPU. (mode, reason); "slow" cells are not run.
-_HPU_KNOWN = {
-    "BrainModule": ("lazy", "graph compile fails in forward (synStatus 26)"),
-    "VEMG2Pose": ("lazy", "graph compile fails in forward (synStatus 26)"),
-    "CodeBrain": ("lazy", "graph compile fails in backward (synStatus 26)"),
-    "DANCE": ("lazy", "graph compile fails in backward (synStatus 26)"),
-    "SensingDynamics": ("lazy", "bfloat16 output is not finite"),
-    "EEGSym": ("lazy", "slow: graph compile takes > 300 s"),
-    "SignalJEPA_PreLocal": ("lazy", "slow: graph compile takes > 300 s"),
-    "MEDFormer": ("both", "slow: > 300 s (gaudi2_agu_config: size - 1 <= uint8 max)"),
-    "USleep": ("eager", "graph compile fails at a length-1 Upsample"),
-}
+class _OpLog(TorchDispatchMode):
+    """Record the aten ops run under it: name, (dtype, device, ndim, contiguous)
+    of the tensor inputs and outputs, the other arguments, and whether an input
+    derives from ``spectral_input`` or a 3-D ``permute`` (by tensor identity)."""
 
+    def __init__(self):
+        super().__init__()
+        self.ops, self.spectral, self.permuted = [], {}, {}
 
-def _hpu_cases():
-    for name, required, signal in models_mandatory_parameters:
-        mode, reason = _HPU_KNOWN.get(name, (None, ""))
-        marks = []
-        if mode in ("both", _HPU_MODE):
-            marks = pytest.mark.xfail(reason=reason, run=not reason.startswith("slow"))
-        yield pytest.param(name, required, signal, marks=marks, id=name)
-
-
-@pytest.mark.hpu
-@pytest.mark.skipif(
-    importlib.util.find_spec("habana_frameworks") is None, reason="needs a Gaudi HPU"
-)
-@pytest.mark.parametrize("model_name,required_params,signal_params", list(_hpu_cases()))
-def test_registered_model_on_hpu(model_name, required_params, signal_params):
-    """Forward and one train step on HPU in float32 and bfloat16."""
-    import habana_frameworks.torch.core as htcore
-
-    model, x = _build_case(model_name, required_params, signal_params)
-    _materialize(model, x)
-    for dtype in (torch.float32, torch.bfloat16):
-        hpu_model = copy.deepcopy(model).to("hpu", dtype).eval()
-        hpu_x = x.to("hpu", dtype)
-        with torch.no_grad():
-            leaves = list(_tensor_leaves(hpu_model(hpu_x)))
-        htcore.mark_step()
-        assert all(t.device.type == "hpu" for t in leaves)
-        assert all(torch.isfinite(t).all() for t in leaves if t.is_floating_point())
-        _train_step(
-            hpu_model, hpu_x, htcore.mark_step, _UNUSED_IN_FORWARD.get(model_name)
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        out = func(*args, **(kwargs or {}))
+        flat = tree_flatten((args, kwargs))[0]
+        ins = [t for t in flat if isinstance(t, torch.Tensor)]
+        outs = [t for t in tree_flatten(out)[0] if isinstance(t, torch.Tensor)]
+        spectral = any(id(t) in self.spectral for t in ins)
+        if spectral:
+            self.spectral.update((id(t), t) for t in outs)
+        name = func.overloadpacket.__name__
+        if name == "permute" and ins[0].dim() == 3:
+            self.permuted.update((id(t), t) for t in outs)
+        self.ops.append(
+            _Op(
+                name,
+                func._overloadname,
+                tuple(_meta(t) for t in ins),
+                tuple(_meta(t) for t in outs),
+                tree_map_only(torch.Tensor, lambda t: None, args),
+                tree_map_only(torch.Tensor, lambda t: None, kwargs or {}),
+                spectral,
+            )
         )
+        return out
+
+
+# ``args``/``kwargs`` as dispatched, tensors replaced by None.
+_Op = namedtuple("_Op", "name overload ins outs args kwargs spectral")
+
+
+def _meta(t):
+    return t.dtype, t.device.type, t.dim(), t.is_contiguous()
+
+
+@contextlib.contextmanager
+def _record():
+    """Run the block under an ``_OpLog``; ``spectral_input`` outputs are tagged
+    (a view, so the tag is not put on the input it may return) and RNN modules
+    log their input as op ``rnn:<module>``."""
+    log = _OpLog()
+    original = braindecode.functional.spectral_input
+
+    def tagged(x):
+        y = original(x)
+        y = y.view_as(y)
+        log.spectral[id(y)] = y
+        return y
+
+    def rnn_input(module, args):
+        if isinstance(module, nn.RNNBase) and isinstance(args[0], torch.Tensor):
+            permuted = id(args[0]) in log.permuted
+            log.ops.append(
+                _Op(f"rnn:{type(module).__name__}", "", (), (), (permuted,), {}, False)
+            )
+
+    patched = [
+        m
+        for name, m in list(sys.modules.items())
+        if name.startswith("braindecode")
+        and getattr(m, "spectral_input", None) is original
+    ]
+    for m in patched:
+        m.spectral_input = tagged
+    hook = register_module_forward_pre_hook(rnn_input)
+    try:
+        with log:
+            yield log
+    finally:
+        hook.remove()
+        for m in patched:
+            m.spectral_input = original
+
+
+@functools.cache
+def _findings(model_name):
+    """Op patterns of one eval forward, one train forward and its backward."""
+    case = next(c for c in models_mandatory_parameters if c[0] == model_name)
+    model, x = _build_case(*case)
+    _materialize(model, x)
+    with torch.no_grad(), _record() as eval_log:
+        model(x)
+    model.train()
+    with _record() as train_log:
+        leaves = [t for t in _tensor_leaves(model(x)) if t.requires_grad]
+    with _record() as backward_log:
+        if leaves:
+            sum(t.float().square().mean() for t in leaves).backward()
+    forward = eval_log.ops + train_log.ops
+    return {
+        "complex": _complex_sources(forward, backward_log.ops),
+        "host_sync": _host_syncs(forward),
+        "gaps": _accelerator_gaps(forward + backward_log.ops),
+    }
+
+
+def _cases(allowed):
+    """models_mandatory_parameters, xfail where ``allowed`` gives a reason."""
+    return [
+        pytest.param(
+            *case,
+            marks=[pytest.mark.xfail(reason=allowed[case[0]], strict=True)]
+            if case[0] in allowed
+            else [],
+            id=case[0],
+        )
+        for case in models_mandatory_parameters
+    ]
+
+
+def _complex_sources(forward, backward):
+    """Ops creating complex tensors from real ones not from ``spectral_input``
+    (backward of routed ops runs where their forward ran)."""
+    is_complex = lambda ts: any(t[0].is_complex for t in ts)
+    found = {
+        op.name
+        for op in forward
+        if is_complex(op.outs) and not is_complex(op.ins) and not op.spectral
+    }
+    if not any(is_complex(op.outs) for op in forward):
+        found |= {f"{op.name} (backward)" for op in backward if is_complex(op.outs)}
+    return sorted(found)
+
+
+# Gaudi has no complex dtype: an FFT/STFT input goes through
+# braindecode.functional.spectral_input, which moves HPU tensors to the CPU.
+@pytest.mark.parametrize("model_name,required_params,signal_params", _cases({}))
+def test_registered_model_complex_only_after_spectral_input(
+    model_name, required_params, signal_params
+):
+    """Complex tensors derive from ``spectral_input`` outputs only."""
+    found = _findings(model_name)["complex"]
+    assert not found, f"complex tensors not routed through spectral_input: {found}"
+
+
+# Host syncs and data-dependent shapes cut the Gaudi lazy graph (and CUDA
+# graphs, torch.compile) at every step.
+_SYNC_OPS = {
+    "_local_scalar_dense",  # .item(), bool(t), float(t), int(t)
+    "is_nonzero",
+    "item",
+    "nonzero",
+    "masked_select",
+    "_unique",
+    "_unique2",
+    "unique_dim",
+    "unique_consecutive",
+}
+# Allowed per model, with the reason.
+_HOST_SYNC = {}
+
+
+def _host_syncs(ops):
+    found = set()
+    for op in ops:
+        if op.name in _SYNC_OPS:
+            found.add(op.name)
+        elif op.name.startswith("index") and any(
+            t[0] == torch.bool for t in op.ins[1:]
+        ):
+            found.add(f"{op.name} with a boolean mask")
+        elif (
+            op.name == "repeat_interleave"
+            and op.overload == "Tensor"
+            and op.kwargs.get("output_size") is None
+            and len(op.args) < 2
+        ):
+            found.add("repeat_interleave with tensor repeats")
+    return sorted(found)
+
+
+@pytest.mark.parametrize("model_name,required_params,signal_params", _cases(_HOST_SYNC))
+def test_registered_model_forward_has_no_host_sync(
+    model_name, required_params, signal_params
+):
+    """Forward reads no tensor value on the host and has no data-dependent shape."""
+    found = _findings(model_name)["host_sync"]
+    assert not found, f"host syncs / data-dependent shapes in forward: {found}"
+
+
+def _elu_scales(op):
+    scale = op.args[2] if len(op.args) > 2 else op.kwargs.get("scale", 1)
+    input_scale = op.args[3] if len(op.args) > 3 else op.kwargs.get("input_scale", 1)
+    return scale, input_scale
+
+
+def _accelerator_gaps(ops):
+    """Op patterns that broke models on Gaudi or in bfloat16/float16; each one
+    names the fix that removed it."""
+    found = set()
+    for op in ops:
+        if op.name == "avg_pool3d":
+            # no CPU bfloat16/float16 kernel (EEGSym, c2aff52b)
+            found.add("avg_pool3d")
+        elif op.name == "elu" and _elu_scales(op) != (1, 1):
+            # nn.SELU: does not train on Gaudi (BrainOmni, ba1264bf)
+            found.add("elu with scale != 1 (nn.SELU): use scale * F.elu")
+        elif op.name == "roll" and not op.ins[0][3]:
+            # wrong values in Gaudi eager mode (EMG2QwertyNet, #1249)
+            found.add("roll of a non-contiguous tensor")
+        elif op.name.startswith("rnn:") and op.args[0]:
+            # Gaudi lazy mode fails to compile (BrainOmni SEANet LSTM, #1249)
+            found.add(f"{op.name[4:]} fed by a 3-D permute")
+    return sorted(found)
+
+
+@pytest.mark.parametrize("model_name,required_params,signal_params", _cases({}))
+def test_registered_model_avoids_accelerator_gaps(
+    model_name, required_params, signal_params
+):
+    """Forward and backward avoid ops known to fail on Gaudi or in low precision
+    (cdist in bfloat16/float16: test_forward_in_dtype)."""
+    found = _findings(model_name)["gaps"]
+    assert not found, f"ops with known accelerator/low-precision gaps: {found}"

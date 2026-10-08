@@ -48,6 +48,7 @@ from braindecode.models.util import (
     non_classification_models,
 )
 from braindecode.models.util import _get_signal_params as get_sp
+from test.unit_tests.models.test_model_contract import _record
 
 rng = np.random.default_rng(12)
 
@@ -850,15 +851,24 @@ def test_forward_in_dtype(model_name, dtype):
     x = torch.randn(2, n_chans, n_times)
     with torch.no_grad():
         model(x)  # materialise lazy modules in float32
-    # Low-precision training is checked on HPU (test_model_contract.py): CPUs
-    # without bfloat16/float16 kernels take minutes per model (DANCE: ~700 s).
+    # Backward only in float64: CPUs without bfloat16/float16 kernels take
+    # minutes per model (DANCE: ~700 s).
     backward = dtype == torch.float64
-    with torch.set_grad_enabled(backward):
+    with torch.set_grad_enabled(backward), _record() as log:
         y = model.to(dtype)(x.to(dtype))
     y = y if torch.is_tensor(y) else next(iter(y.values()))
     assert y.dtype == dtype and torch.isfinite(y).all()
     if not backward:
+        # no bfloat16/float16 cdist kernel (modules.quantization, #1246)
+        cdist = [op for op in log.ops if op.name == "_cdist_forward"]
+        assert all(t[0] != dtype for op in cdist for t in op.ins)
         return
+    # Every floating tensor follows the model dtype: a float32 one comes from
+    # torch.zeros/full/tensor without dtype= or a hard-coded .float().
+    float32 = sorted(
+        {op.name for op in log.ops if any(t[0] == torch.float32 for t in op.outs)}
+    )
+    assert not float32, f"float32 tensors in a float64 forward: {float32}"
     y.float().square().mean().backward()
     grads = [p.grad for p in model.parameters() if p.grad is not None]
     assert grads and all(g.dtype == dtype and torch.isfinite(g).all() for g in grads)
