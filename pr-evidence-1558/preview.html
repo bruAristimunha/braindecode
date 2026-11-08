@@ -1,0 +1,842 @@
+<!doctype html><meta charset=utf-8>
+<style>
+.bd-model {font:13px/1.5 system-ui,sans-serif; max-width:880px; border:1px solid #8886; border-radius:8px; padding:12px; color:inherit}
+.bd-model table {border-collapse:collapse; width:100%; text-align:left}
+.bd-model th,.bd-model td {padding:3px 8px; border-bottom:1px solid #8883; text-align:left}
+.bd-model caption {text-align:left; font-weight:600; font-size:16px}
+.bd-model a {color:inherit; text-decoration:underline}
+.bd-model .bd-chip {display:inline-block; border:1px solid #8886; border-radius:12px; padding:0 7px; margin:2px}
+.bd-model .bd-loaded {background:#2ea04325}
+.bd-model .bd-new {background:#d4820025}
+.bd-model summary {cursor:pointer; padding-top:8px}
+.bd-model pre {max-height:350px; overflow:auto; text-align:left}
+</style>
+<div class="bd-model">
+<table>
+  <caption>BIOT · checkpoint loaded</caption>
+  <tr><th>Parameters</th><td>3,187,973</td></tr>
+  
+  <tr><th>n_chans</th><td>18</td></tr>
+  
+  <tr><th>n_times</th><td>1000</td></tr>
+  
+  <tr><th>sfreq</th><td>200 Hz</td></tr>
+  
+  <tr><th>n_outputs</th><td>5</td></tr>
+  
+  
+  <tr><th>Weights</th><td>
+    <a href="https://huggingface.co/braindecode/biot-pretrained-shhs-prest-18chs" target="_blank" rel="noopener">braindecode/biot-pretrained-shhs-prest-18chs</a>
+    
+     @ <a href="https://huggingface.co/braindecode/biot-pretrained-shhs-prest-18chs/tree/22ea0dc610ecaca3956be91925974e7cb5e0362f" target="_blank" rel="noopener">22ea0dc</a>
+    
+  </td></tr>
+  <tr><th>License</th><td>bsd-3-clause</td></tr>
+  
+  <tr><th>Trained on (model card)</th><td>
+    
+      
+      <span class="bd-chip">SHHS</span>
+    
+      
+      <span class="bd-chip">PREST</span>
+    
+  </td></tr>
+  
+  
+  <tr><th>Checkpoint-loaded parameters</th><td>
+    3,186,688 / 3,187,973 materialised
+    (99.9%)
+    <progress value="3186688" max="3187973" aria-label="Parameters in fully checkpoint-loaded tensors"></progress>
+    
+    
+  </td></tr>
+  
+</table>
+
+<details><summary>Parameter origin · 99.9% of materialised parameters from listed checkpoint(s)</summary>
+<table>
+  <thead><tr><th>Module</th><th>Type</th><th>Parameters</th><th>Origin</th></tr></thead>
+  <tbody>
+  <tr class="bd-loaded">
+    <td>encoder.patch_embedding.projection</td><td>Linear</td><td>26,112</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.0.0.fn.to_q</td><td>Linear</td><td>65,536</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.0.0.fn.to_k</td><td>Linear</td><td>65,536</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.0.0.fn.to_v</td><td>Linear</td><td>65,536</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.0.0.fn.to_out</td><td>Linear</td><td>65,792</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.0.0.norm</td><td>LayerNorm</td><td>512</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.0.1.fn.fn.w1</td><td>Linear</td><td>263,168</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.0.1.fn.fn.w2</td><td>Linear</td><td>262,400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.0.1.norm</td><td>LayerNorm</td><td>512</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.1.0.fn.to_q</td><td>Linear</td><td>65,536</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.1.0.fn.to_k</td><td>Linear</td><td>65,536</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.1.0.fn.to_v</td><td>Linear</td><td>65,536</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.1.0.fn.to_out</td><td>Linear</td><td>65,792</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.1.0.norm</td><td>LayerNorm</td><td>512</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.1.1.fn.fn.w1</td><td>Linear</td><td>263,168</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.1.1.fn.fn.w2</td><td>Linear</td><td>262,400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.1.1.norm</td><td>LayerNorm</td><td>512</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.2.0.fn.to_q</td><td>Linear</td><td>65,536</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.2.0.fn.to_k</td><td>Linear</td><td>65,536</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.2.0.fn.to_v</td><td>Linear</td><td>65,536</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.2.0.fn.to_out</td><td>Linear</td><td>65,792</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.2.0.norm</td><td>LayerNorm</td><td>512</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.2.1.fn.fn.w1</td><td>Linear</td><td>263,168</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.2.1.fn.fn.w2</td><td>Linear</td><td>262,400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.2.1.norm</td><td>LayerNorm</td><td>512</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.3.0.fn.to_q</td><td>Linear</td><td>65,536</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.3.0.fn.to_k</td><td>Linear</td><td>65,536</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.3.0.fn.to_v</td><td>Linear</td><td>65,536</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.3.0.fn.to_out</td><td>Linear</td><td>65,792</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.3.0.norm</td><td>LayerNorm</td><td>512</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.3.1.fn.fn.w1</td><td>Linear</td><td>263,168</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.3.1.fn.fn.w2</td><td>Linear</td><td>262,400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.transformer.layers.layers.3.1.norm</td><td>LayerNorm</td><td>512</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.channel_tokens</td><td>Embedding</td><td>4,608</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-new">
+    <td>final_layer.classification_head</td><td>Linear</td><td>1,285</td>
+    <td>new or adapted</td>
+  </tr></tbody>
+</table>
+</details>
+
+<details><summary>Architecture</summary><pre>BIOT(
+  (encoder): _BIOTEncoder(
+    (patch_embedding): _PatchFrequencyEmbedding(
+      (projection): Linear(in_features=101, out_features=256, bias=True)
+    )
+    (transformer): LinearAttentionTransformer(
+      (layers): _Layers(
+        (layers): ModuleList(
+          (0-3): 4 x ModuleList(
+            (0): _PreNorm(
+              (fn): _SelfAttention(
+                (to_q): Linear(in_features=256, out_features=256, bias=False)
+                (to_k): Linear(in_features=256, out_features=256, bias=False)
+                (to_v): Linear(in_features=256, out_features=256, bias=False)
+                (to_out): Linear(in_features=256, out_features=256, bias=True)
+                (dropout): Dropout(p=0.2, inplace=False)
+              )
+              (norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True, bias=True)
+            )
+            (1): _PreNorm(
+              (fn): _Chunk(
+                (fn): _FeedForward(
+                  (w1): Linear(in_features=256, out_features=1024, bias=True)
+                  (act): GELU(approximate=&#39;none&#39;)
+                  (dropout): Dropout(p=0.0, inplace=False)
+                  (w2): Linear(in_features=1024, out_features=256, bias=True)
+                )
+              )
+              (norm): LayerNorm((256,), eps=1e-05, elementwise_affine=True, bias=True)
+            )
+          )
+        )
+      )
+    )
+    (positional_encoding): SinusoidalPositionalEncoding(
+      (dropout): Dropout(p=0.5, inplace=False)
+    )
+    (channel_tokens): Embedding(18, 256)
+  )
+  (final_layer): _ClassificationHead(
+    (activation_layer): ELU(alpha=1.0)
+    (classification_head): Linear(in_features=256, out_features=5, bias=True)
+  )
+)</pre></details>
+</div><br>
+<style>
+.bd-model {font:13px/1.5 system-ui,sans-serif; max-width:880px; border:1px solid #8886; border-radius:8px; padding:12px; color:inherit}
+.bd-model table {border-collapse:collapse; width:100%; text-align:left}
+.bd-model th,.bd-model td {padding:3px 8px; border-bottom:1px solid #8883; text-align:left}
+.bd-model caption {text-align:left; font-weight:600; font-size:16px}
+.bd-model a {color:inherit; text-decoration:underline}
+.bd-model .bd-chip {display:inline-block; border:1px solid #8886; border-radius:12px; padding:0 7px; margin:2px}
+.bd-model .bd-loaded {background:#2ea04325}
+.bd-model .bd-new {background:#d4820025}
+.bd-model summary {cursor:pointer; padding-top:8px}
+.bd-model pre {max-height:350px; overflow:auto; text-align:left}
+</style>
+<div class="bd-model">
+<table>
+  <caption>CBraMod · checkpoint loaded</caption>
+  <tr><th>Parameters</th><td>5,000,004</td></tr>
+  
+  <tr><th>n_chans</th><td>19</td></tr>
+  
+  <tr><th>n_times</th><td>1000</td></tr>
+  
+  <tr><th>n_outputs</th><td>4</td></tr>
+  
+  
+  <tr><th>Weights</th><td>
+    <a href="https://huggingface.co/braindecode/cbramod-pretrained" target="_blank" rel="noopener">braindecode/cbramod-pretrained</a>
+    
+     @ <a href="https://huggingface.co/braindecode/cbramod-pretrained/tree/cb5dbd7a6916c3786da9a97dcb38c91dd88e1676" target="_blank" rel="noopener">cb5dbd7</a>
+    
+  </td></tr>
+  <tr><th>License</th><td>bsd-3-clause</td></tr>
+  
+  <tr><th>Trained on (model card)</th><td>
+    
+      
+      <span class="bd-chip">TUEG</span>
+    
+  </td></tr>
+  
+  
+  <tr><th>Checkpoint-loaded parameters</th><td>
+    4,924,000 / 5,000,004 materialised
+    (98.5%)
+    <progress value="4924000" max="5000004" aria-label="Parameters in fully checkpoint-loaded tensors"></progress>
+    
+    
+  </td></tr>
+  
+</table>
+
+<details><summary>Parameter origin · 98.5% of materialised parameters from listed checkpoint(s)</summary>
+<table>
+  <thead><tr><th>Module</th><th>Type</th><th>Parameters</th><th>Origin</th></tr></thead>
+  <tbody>
+  <tr class="bd-loaded">
+    <td>patch_embedding</td><td>_PatchEmbedding</td><td>200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>patch_embedding.positional_encoding.0</td><td>Conv2d</td><td>26,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>patch_embedding.proj_in.0</td><td>Conv2d</td><td>1,250</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>patch_embedding.proj_in.1</td><td>GroupNorm</td><td>50</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>patch_embedding.proj_in.3</td><td>Conv2d</td><td>1,900</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>patch_embedding.proj_in.4</td><td>GroupNorm</td><td>50</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>patch_embedding.proj_in.6</td><td>Conv2d</td><td>1,900</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>patch_embedding.proj_in.7</td><td>GroupNorm</td><td>50</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>patch_embedding.spectral_proj.0</td><td>Linear</td><td>20,400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.0.self_attn_s</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.0.self_attn_s.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.0.self_attn_t</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.0.self_attn_t.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.0.linear1</td><td>Linear</td><td>160,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.0.linear2</td><td>Linear</td><td>160,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.0.norm1</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.0.norm2</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.1.self_attn_s</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.1.self_attn_s.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.1.self_attn_t</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.1.self_attn_t.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.1.linear1</td><td>Linear</td><td>160,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.1.linear2</td><td>Linear</td><td>160,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.1.norm1</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.1.norm2</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.2.self_attn_s</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.2.self_attn_s.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.2.self_attn_t</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.2.self_attn_t.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.2.linear1</td><td>Linear</td><td>160,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.2.linear2</td><td>Linear</td><td>160,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.2.norm1</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.2.norm2</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.3.self_attn_s</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.3.self_attn_s.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.3.self_attn_t</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.3.self_attn_t.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.3.linear1</td><td>Linear</td><td>160,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.3.linear2</td><td>Linear</td><td>160,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.3.norm1</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.3.norm2</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.4.self_attn_s</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.4.self_attn_s.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.4.self_attn_t</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.4.self_attn_t.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.4.linear1</td><td>Linear</td><td>160,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.4.linear2</td><td>Linear</td><td>160,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.4.norm1</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.4.norm2</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.5.self_attn_s</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.5.self_attn_s.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.5.self_attn_t</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.5.self_attn_t.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.5.linear1</td><td>Linear</td><td>160,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.5.linear2</td><td>Linear</td><td>160,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.5.norm1</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.5.norm2</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.6.self_attn_s</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.6.self_attn_s.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.6.self_attn_t</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.6.self_attn_t.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.6.linear1</td><td>Linear</td><td>160,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.6.linear2</td><td>Linear</td><td>160,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.6.norm1</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.6.norm2</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.7.self_attn_s</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.7.self_attn_s.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.7.self_attn_t</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.7.self_attn_t.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.7.linear1</td><td>Linear</td><td>160,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.7.linear2</td><td>Linear</td><td>160,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.7.norm1</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.7.norm2</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.8.self_attn_s</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.8.self_attn_s.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.8.self_attn_t</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.8.self_attn_t.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.8.linear1</td><td>Linear</td><td>160,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.8.linear2</td><td>Linear</td><td>160,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.8.norm1</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.8.norm2</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.9.self_attn_s</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.9.self_attn_s.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.9.self_attn_t</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.9.self_attn_t.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.9.linear1</td><td>Linear</td><td>160,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.9.linear2</td><td>Linear</td><td>160,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.9.norm1</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.9.norm2</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.10.self_attn_s</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.10.self_attn_s.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.10.self_attn_t</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.10.self_attn_t.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.10.linear1</td><td>Linear</td><td>160,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.10.linear2</td><td>Linear</td><td>160,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.10.norm1</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.10.norm2</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.11.self_attn_s</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.11.self_attn_s.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.11.self_attn_t</td><td>MultiheadAttention</td><td>30,300</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.11.self_attn_t.out_proj</td><td>NonDynamicallyQuantizableLinear</td><td>10,100</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.11.linear1</td><td>Linear</td><td>160,800</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.11.linear2</td><td>Linear</td><td>160,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.11.norm1</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>encoder.layers.11.norm2</td><td>LayerNorm</td><td>400</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-loaded">
+    <td>proj_out.0</td><td>Linear</td><td>40,200</td>
+    <td>pretrained</td>
+  </tr>
+  <tr class="bd-new">
+    <td>final_layer.1</td><td>Linear</td><td>76,004</td>
+    <td>new or adapted</td>
+  </tr></tbody>
+</table>
+</details>
+
+<details><summary>Architecture</summary><pre>CBraMod(
+  (rearrange): PatchTokenizer()
+  (patch_embedding): _PatchEmbedding(
+    (positional_encoding): Sequential(
+      (0): Conv2d(200, 200, kernel_size=(19, 7), stride=(1, 1), padding=(9, 3), groups=200)
+    )
+    (proj_in): Sequential(
+      (0): Conv2d(1, 25, kernel_size=(1, 49), stride=(1, 25), padding=(0, 24))
+      (1): GroupNorm(5, 25, eps=1e-05, affine=True, bias=True)
+      (2): GELU(approximate=&#39;none&#39;)
+      (3): Conv2d(25, 25, kernel_size=(1, 3), stride=(1, 1), padding=(0, 1))
+      (4): GroupNorm(5, 25, eps=1e-05, affine=True, bias=True)
+      (5): GELU(approximate=&#39;none&#39;)
+      (6): Conv2d(25, 25, kernel_size=(1, 3), stride=(1, 1), padding=(0, 1))
+      (7): GroupNorm(5, 25, eps=1e-05, affine=True, bias=True)
+      (8): GELU(approximate=&#39;none&#39;)
+    )
+    (spectral_proj): Sequential(
+      (0): Linear(in_features=101, out_features=200, bias=True)
+      (1): Dropout(p=0.1, inplace=False)
+    )
+  )
+  (encoder): _TransformerEncoder(
+    (layers): ModuleList(
+      (0-11): 12 x CrissCrossTransformerEncoderLayer(
+        (self_attn_s): MultiheadAttention(
+          (out_proj): NonDynamicallyQuantizableLinear(in_features=100, out_features=100, bias=True)
+        )
+        (self_attn_t): MultiheadAttention(
+          (out_proj): NonDynamicallyQuantizableLinear(in_features=100, out_features=100, bias=True)
+        )
+        (linear1): Linear(in_features=200, out_features=800, bias=True)
+        (dropout): Dropout(p=0.1, inplace=False)
+        (linear2): Linear(in_features=800, out_features=200, bias=True)
+        (norm1): LayerNorm((200,), eps=1e-05, elementwise_affine=True, bias=True)
+        (norm2): LayerNorm((200,), eps=1e-05, elementwise_affine=True, bias=True)
+        (dropout1): Dropout(p=0.1, inplace=False)
+        (dropout2): Dropout(p=0.1, inplace=False)
+        (activation): GELU(approximate=&#39;none&#39;)
+      )
+    )
+  )
+  (proj_out): Sequential(
+    (0): Linear(in_features=200, out_features=200, bias=True)
+  )
+  (final_layer): Sequential(
+    (0): Flatten(start_dim=1, end_dim=-1)
+    (1): Linear(in_features=19000, out_features=4, bias=True)
+  )
+)</pre></details>
+</div><br>
+<style>
+.bd-model {font:13px/1.5 system-ui,sans-serif; max-width:880px; border:1px solid #8886; border-radius:8px; padding:12px; color:inherit}
+.bd-model table {border-collapse:collapse; width:100%; text-align:left}
+.bd-model th,.bd-model td {padding:3px 8px; border-bottom:1px solid #8883; text-align:left}
+.bd-model caption {text-align:left; font-weight:600; font-size:16px}
+.bd-model a {color:inherit; text-decoration:underline}
+.bd-model .bd-chip {display:inline-block; border:1px solid #8886; border-radius:12px; padding:0 7px; margin:2px}
+.bd-model .bd-loaded {background:#2ea04325}
+.bd-model .bd-new {background:#d4820025}
+.bd-model summary {cursor:pointer; padding-top:8px}
+.bd-model pre {max-height:350px; overflow:auto; text-align:left}
+</style>
+<div class="bd-model">
+<table>
+  <caption>EEGNet</caption>
+  <tr><th>Parameters</th><td>3,444</td></tr>
+  
+  <tr><th>n_chans</th><td>22</td></tr>
+  
+  <tr><th>n_times</th><td>1000</td></tr>
+  
+  <tr><th>n_outputs</th><td>4</td></tr>
+  
+  
+</table>
+
+<details><summary>Architecture</summary><pre>EEGNet(
+  (ensuredims): Ensure4d()
+  (dimshuffle): Rearrange(&#39;batch ch t 1 -&gt; batch 1 ch t&#39;)
+  (conv_temporal): Conv2d(1, 8, kernel_size=(1, 64), stride=(1, 1), padding=(0, 32), bias=False)
+  (bnorm_temporal): BatchNorm2d(8, eps=0.001, momentum=0.01, affine=True, bias=True, track_running_stats=True)
+  (conv_spatial): ParametrizedConv2dWithConstraint(
+    8, 16, kernel_size=(22, 1), stride=(1, 1), groups=8, bias=False
+    (parametrizations): ModuleDict(
+      (weight): ParametrizationList(
+        (0): MaxNormParametrize()
+      )
+    )
+  )
+  (bnorm_1): BatchNorm2d(16, eps=0.001, momentum=0.01, affine=True, bias=True, track_running_stats=True)
+  (elu_1): ELU(alpha=1.0)
+  (pool_1): AvgPool2d(kernel_size=(1, 4), stride=(1, 4), padding=0)
+  (drop_1): Dropout(p=0.25, inplace=False)
+  (conv_separable_depth): Conv2d(16, 16, kernel_size=(1, 16), stride=(1, 1), padding=(0, 8), groups=16, bias=False)
+  (conv_separable_point): Conv2d(16, 16, kernel_size=(1, 1), stride=(1, 1), bias=False)
+  (bnorm_2): BatchNorm2d(16, eps=0.001, momentum=0.01, affine=True, bias=True, track_running_stats=True)
+  (elu_2): ELU(alpha=1.0)
+  (pool_2): AvgPool2d(kernel_size=(1, 8), stride=(1, 8), padding=0)
+  (drop_2): Dropout(p=0.25, inplace=False)
+  (final_layer): Sequential(
+    (conv_classifier): Conv2d(16, 4, kernel_size=(1, 31), stride=(1, 1))
+    (permute_back): Rearrange(&#39;batch x y z -&gt; batch x z y&#39;)
+    (squeeze): SqueezeFinalOutput(
+      (squeeze): Rearrange(&#39;b c t 1 -&gt; b c t&#39;)
+    )
+  )
+)</pre></details>
+</div><br>
