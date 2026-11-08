@@ -1,0 +1,66 @@
+{
+  "top1": {
+    "paper": {
+      "mean": 13.8,
+      "sd": 3.3
+    },
+    "one_training": {
+      "mean": 14.1,
+      "sd": 3.2812599206199233
+    },
+    "five_trainings": {
+      "mean": 13.58,
+      "sd": 3.3148822670563196
+    },
+    "per_subject_five_training": [
+      11.1,
+      10.5,
+      12.8,
+      16.5,
+      7.9,
+      14.3,
+      15.2,
+      19.6,
+      12.9,
+      15.0
+    ]
+  },
+  "top5": {
+    "paper": {
+      "mean": 39.5,
+      "sd": 6.5
+    },
+    "one_training": {
+      "mean": 39.25,
+      "sd": 7.122928548786033
+    },
+    "five_trainings": {
+      "mean": 39.38,
+      "sd": 6.6586284874089
+    },
+    "per_subject_five_training": [
+      34.8,
+      33.7,
+      38.9,
+      46.7,
+      26.4,
+      40.4,
+      40.2,
+      48.8,
+      38.8,
+      45.1
+    ]
+  },
+  "checks": {
+    "paired_runs": 50,
+    "port_vs_original_max_abs_accuracy_difference": 0.0,
+    "tags": [
+      "nemar-main",
+      "nemar-rep2024",
+      "nemar-rep2025",
+      "nemar-rep2026",
+      "nemar-rep2027"
+    ],
+    "csv_sha256": "6e878cded48a6e38a9bd2f5551b213e0e53c5a31d68fb00f844453f8f8784d7d"
+  }
+}
