@@ -1,0 +1,753 @@
+{
+ "script": "replication/megxl/post-review-11081640/figure/plot.py",
+ "script_sha256": "7241c6e7319bb70bfcc9d2fb746e6af9f289f00daac7e51f57a5d7a486ba5a14",
+ "inputs_sha256": {
+  "replication/megxl/results/nemar_megmasc_v2/summary2.json": "51c64b60b881c6228ceac3683902712e0acbe90d2456666a055446b031c0ebc1",
+  "replication/megxl/results/nemar_megmasc_v2/runs2.csv": "7cb72386bef4a6597637d84520dc65d3bddc37368205bf9b09966945f05c371b",
+  "replication/megxl/code-review/result-review-11081640/cross_eval.json": "3a753b600a663214c6fbbeed36f7d17c00569cd15299ec9fb05c6977db6f1078",
+  "replication/megxl/code-review/result-review-11081640/recheck_metrics.json": "80ebdffa38b12a5fe8345108b1ae174c057d1bc566cfb0b947439ccc421f6f1e",
+  "replication/megxl/ref/MEG-XL-97da0417/configs/eval_criss_cross_word_classification_linear_probe_gwilliams.yaml": "1bfe033b5f2cf84e7440f3db747b0b627a4511849272c66998789cfaae0cca40",
+  "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json": "fc1ccceff5b3604c264ce4e459663843699bc468294f90b69b08a421c1143bf1",
+  "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json": "f843f506d0851e0394d5dc288ac9bcbb071bbf374b747e0175f614409ab939fe",
+  "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json": "521480602e9ae1ddaf89baffa807d0c87528b8de422153df1b5242ff4656a089",
+  "replication/megxl/nb3/run-0494230181b7/out/orig_stoch_0.07/test_metrics.json": "ffc60be1121318cc53dd527f43be8e387060781fc585f2c03eb85576421a7a9c",
+  "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.25/test_metrics.json": "2c11c18a5fc5ad1079b2d66300a11532c2444838464e91694db9ea45a2bf6285",
+  "replication/megxl/nb3/run-0494230181b7/out/port_det_0.25/test_metrics.json": "68002ccf8db925a12d96edd5511aae306c98b3531114ffe3c427c0124b91f297",
+  "replication/megxl/post-review-11081640/determinism/result.json": "9fa1ffef3978db6fef7ac13e5043e00ac8572aa959c981602ac73099628317f6"
+ },
+ "determinism_included": true,
+ "numbers": [
+  {
+   "element": "paper value (panel a)",
+   "value": 0.21973,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "paper.value"
+  },
+  {
+   "element": "paper bar half-width (panel a)",
+   "value": 0.00964,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "paper.bar_half_width"
+  },
+  {
+   "element": "chance line, 50-word retrieval (panels a, b)",
+   "value": 0.2,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "chance"
+  },
+  {
+   "element": "band relative tolerance",
+   "value": 0.05,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "tolerances.paper_rel"
+  },
+  {
+   "element": "5 % band low (panel a)",
+   "value": 0.2087435,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json (paper.value*(1-paper_rel)); equals replication/megxl/code-review/result-review-11081640/recheck_metrics.json",
+   "key": "verdict.band[0]"
+  },
+  {
+   "element": "5 % band high (panel a)",
+   "value": 0.23071650000000002,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json (paper.value*(1+paper_rel)); equals replication/megxl/code-review/result-review-11081640/recheck_metrics.json",
+   "key": "verdict.band[1]"
+  },
+  {
+   "element": "chance line, 250-word retrieval (panel c)",
+   "value": 0.04,
+   "source": "replication/megxl/ref/MEG-XL-97da0417/configs/eval_criss_cross_word_classification_linear_probe_gwilliams.yaml",
+   "key": "evaluation.k / evaluation.retrieval_set_sizes[1]"
+  },
+  {
+   "element": "early-stopping min_delta (panel c threshold)",
+   "value": 0.001,
+   "source": "replication/megxl/ref/MEG-XL-97da0417/configs/eval_criss_cross_word_classification_linear_probe_gwilliams.yaml",
+   "key": "training.min_delta"
+  },
+  {
+   "element": "orig_det_0.07 value (panel a)",
+   "value": 0.21302521641233138,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "arms.orig_det_0.07.value"
+  },
+  {
+   "element": "orig_det_0.07 epochs run (panel a text)",
+   "value": 11,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "arms.orig_det_0.07.epochs_run"
+  },
+  {
+   "element": "orig_det_0.07 kept epoch (panel a text, panels b/c marker)",
+   "value": 1,
+   "source": "replication/megxl/code-review/result-review-11081640/recheck_metrics.json",
+   "key": "arms.orig_det_0.07.selected_epoch_reapplied; = replication/megxl/code-review/result-review-11081640/cross_eval.json meta.orig_det_0.07.ckpt_epoch_0based+1"
+  },
+  {
+   "element": "orig_det_0.07 test b50 epoch 1 (panel b)",
+   "value": 0.21302521641233138,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[1].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "orig_det_0.07 test b50 epoch 2 (panel b)",
+   "value": 0.21515289708325752,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[3].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "orig_det_0.07 test b50 epoch 3 (panel b)",
+   "value": 0.19955156111082403,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[5].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "orig_det_0.07 test b50 epoch 4 (panel b)",
+   "value": 0.21539738696372632,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[7].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "orig_det_0.07 test b50 epoch 5 (panel b)",
+   "value": 0.21910957821017626,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[9].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "orig_det_0.07 test b50 epoch 6 (panel b)",
+   "value": 0.22906899402792358,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[11].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "orig_det_0.07 test b50 epoch 7 (panel b)",
+   "value": 0.2203512018052291,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[13].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "orig_det_0.07 test b50 epoch 8 (panel b)",
+   "value": 0.23538004702945448,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[15].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "orig_det_0.07 test b50 epoch 9 (panel b)",
+   "value": 0.22454249761922626,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[17].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "orig_det_0.07 test b50 epoch 10 (panel b)",
+   "value": 0.2412154679281675,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[19].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "orig_det_0.07 test b50 epoch 11 (panel b)",
+   "value": 0.22890395671129227,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[21].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "orig_det_0.07 val b250 epoch 1 (panel c)",
+   "value": 0.05374939205555234,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[0].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "orig_det_0.07 val b250 epoch 2 (panel c)",
+   "value": 0.05364107801333854,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[2].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "orig_det_0.07 val b250 epoch 3 (panel c)",
+   "value": 0.04240774853993752,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[4].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "orig_det_0.07 val b250 epoch 4 (panel c)",
+   "value": 0.05420674784354081,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[6].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "orig_det_0.07 val b250 epoch 5 (panel c)",
+   "value": 0.0498106222060558,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[8].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "orig_det_0.07 val b250 epoch 6 (panel c)",
+   "value": 0.05286146830004907,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[10].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "orig_det_0.07 val b250 epoch 7 (panel c)",
+   "value": 0.048037756234407425,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[12].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "orig_det_0.07 val b250 epoch 8 (panel c)",
+   "value": 0.05145680500270679,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[14].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "orig_det_0.07 val b250 epoch 9 (panel c)",
+   "value": 0.049441459266011394,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[16].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "orig_det_0.07 val b250 epoch 10 (panel c)",
+   "value": 0.05170019179288494,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[18].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "orig_det_0.07 val b250 epoch 11 (panel c)",
+   "value": 0.053784461642958616,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json",
+   "key": "evaluations[20].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 value (panel a)",
+   "value": 0.23211105412100347,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "arms.port_det_0.07.value"
+  },
+  {
+   "element": "port_det_0.07 epochs run (panel a text)",
+   "value": 15,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "arms.port_det_0.07.epochs_run"
+  },
+  {
+   "element": "port_det_0.07 kept epoch (panel a text, panels b/c marker)",
+   "value": 5,
+   "source": "replication/megxl/code-review/result-review-11081640/recheck_metrics.json",
+   "key": "arms.port_det_0.07.selected_epoch_reapplied; = replication/megxl/code-review/result-review-11081640/cross_eval.json meta.port_det_0.07.ckpt_epoch_0based+1"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 1 (panel b)",
+   "value": 0.21302521641233138,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[1].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 2 (panel b)",
+   "value": 0.21504877385094154,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[3].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 3 (panel b)",
+   "value": 0.2000530143553505,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[5].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 4 (panel b)",
+   "value": 0.2217731656582684,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[7].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 5 (panel b)",
+   "value": 0.23211105412100347,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[9].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 6 (panel b)",
+   "value": 0.22140438170457372,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[11].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 7 (panel b)",
+   "value": 0.22614059647621246,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[13].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 8 (panel b)",
+   "value": 0.22605774405992077,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[15].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 9 (panel b)",
+   "value": 0.21557370414577273,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[17].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 10 (panel b)",
+   "value": 0.23256882348535013,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[19].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 11 (panel b)",
+   "value": 0.23428005208166278,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[21].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 12 (panel b)",
+   "value": 0.2331205068574268,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[23].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 13 (panel b)",
+   "value": 0.22620521090468582,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[25].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 14 (panel b)",
+   "value": 0.22603237111957705,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[27].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 test b50 epoch 15 (panel b)",
+   "value": 0.23090637066610614,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[29].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 1 (panel c)",
+   "value": 0.05374939205555234,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[0].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 2 (panel c)",
+   "value": 0.05364107801333854,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[2].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 3 (panel c)",
+   "value": 0.0422689381453116,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[4].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 4 (panel c)",
+   "value": 0.053778665836039956,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[6].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 5 (panel c)",
+   "value": 0.056449249345939936,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[8].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 6 (panel c)",
+   "value": 0.05111376708101111,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[10].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 7 (panel c)",
+   "value": 0.04835755018822369,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[12].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 8 (panel c)",
+   "value": 0.052199262247437185,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[14].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 9 (panel c)",
+   "value": 0.04675981723186043,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[16].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 10 (panel c)",
+   "value": 0.05099601280325425,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[18].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 11 (panel c)",
+   "value": 0.05585901548661161,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[20].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 12 (panel c)",
+   "value": 0.054973303890454836,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[22].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 13 (panel c)",
+   "value": 0.05056598472098509,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[24].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 14 (panel c)",
+   "value": 0.0509526519872771,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[26].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_det_0.07 val b250 epoch 15 (panel c)",
+   "value": 0.052327361864675036,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_det_0.07/test_metrics.json",
+   "key": "evaluations[28].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 value (panel a)",
+   "value": 0.2248750638254747,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "arms.port_own_0.07.value"
+  },
+  {
+   "element": "port_own_0.07 epochs run (panel a text)",
+   "value": 15,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "arms.port_own_0.07.epochs_run"
+  },
+  {
+   "element": "port_own_0.07 kept epoch (panel a text, panels b/c marker)",
+   "value": 5,
+   "source": "replication/megxl/code-review/result-review-11081640/recheck_metrics.json",
+   "key": "arms.port_own_0.07.selected_epoch_reapplied; = replication/megxl/code-review/result-review-11081640/cross_eval.json meta.port_own_0.07.ckpt_epoch_0based+1"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 1 (panel b)",
+   "value": 0.21302521641233138,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[1].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 2 (panel b)",
+   "value": 0.21515289708325752,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[3].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 3 (panel b)",
+   "value": 0.21357715527089882,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[5].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 4 (panel b)",
+   "value": 0.2122654757006284,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[7].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 5 (panel b)",
+   "value": 0.2248750638254747,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[9].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 6 (panel b)",
+   "value": 0.23393242304422418,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[11].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 7 (panel b)",
+   "value": 0.22195334209851464,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[13].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 8 (panel b)",
+   "value": 0.21743990237615546,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[15].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 9 (panel b)",
+   "value": 0.21550050893874498,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[17].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 10 (panel b)",
+   "value": 0.23077680793951968,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[19].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 11 (panel b)",
+   "value": 0.2318077695232873,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[21].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 12 (panel b)",
+   "value": 0.23252720435206986,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[23].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 13 (panel b)",
+   "value": 0.22988129726478032,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[25].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 14 (panel b)",
+   "value": 0.22782657076889762,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[27].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 test b50 epoch 15 (panel b)",
+   "value": 0.2249364844542377,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[29].balanced_top10_accuracy_retrieval50"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 1 (panel c)",
+   "value": 0.05374939205555234,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[0].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 2 (panel c)",
+   "value": 0.053700751004119716,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[2].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 3 (panel c)",
+   "value": 0.05222118374270698,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[4].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 4 (panel c)",
+   "value": 0.05266379116903664,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[6].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 5 (panel c)",
+   "value": 0.05887595488967603,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[8].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 6 (panel c)",
+   "value": 0.05539307660662858,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[10].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 7 (panel c)",
+   "value": 0.04304568191625352,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[12].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 8 (panel c)",
+   "value": 0.04804975070244475,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[14].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 9 (panel c)",
+   "value": 0.04754818786937765,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[16].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 10 (panel c)",
+   "value": 0.051420566318175424,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[18].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 11 (panel c)",
+   "value": 0.05753282813235507,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[20].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 12 (panel c)",
+   "value": 0.048581984727398345,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[22].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 13 (panel c)",
+   "value": 0.054544761485545434,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[24].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 14 (panel c)",
+   "value": 0.05166217149643783,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[26].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "port_own_0.07 val b250 epoch 15 (panel c)",
+   "value": 0.05390249371898976,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/port_own_0.07/test_metrics.json",
+   "key": "evaluations[28].balanced_top10_accuracy_retrieval250"
+  },
+  {
+   "element": "orig_stoch_0.07 value (panel a)",
+   "value": 0.2262571624157076,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "arms.orig_stoch_0.07.value"
+  },
+  {
+   "element": "orig_stoch_0.07 epochs run (panel a text)",
+   "value": 16,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "arms.orig_stoch_0.07.epochs_run"
+  },
+  {
+   "element": "orig_stoch_0.07 kept epoch (panel a text, panels b/c marker)",
+   "value": 6,
+   "source": "replication/megxl/code-review/result-review-11081640/recheck_metrics.json",
+   "key": "arms.orig_stoch_0.07.selected_epoch_reapplied"
+  },
+  {
+   "element": "orig_det_0.25 value (panel a)",
+   "value": 0.23296052642280654,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "arms.orig_det_0.25.value"
+  },
+  {
+   "element": "orig_det_0.25 epochs run (panel a text)",
+   "value": 12,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "arms.orig_det_0.25.epochs_run"
+  },
+  {
+   "element": "orig_det_0.25 kept epoch (panel a text, panels b/c marker)",
+   "value": 2,
+   "source": "replication/megxl/code-review/result-review-11081640/recheck_metrics.json",
+   "key": "arms.orig_det_0.25.selected_epoch_reapplied; = replication/megxl/code-review/result-review-11081640/cross_eval.json meta.orig_det_0.25.ckpt_epoch_0based+1"
+  },
+  {
+   "element": "port_det_0.25 value (panel a)",
+   "value": 0.24487391698687355,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "arms.port_det_0.25.value"
+  },
+  {
+   "element": "port_det_0.25 epochs run (panel a text)",
+   "value": 13,
+   "source": "replication/megxl/results/nemar_megmasc_v2/summary2.json",
+   "key": "arms.port_det_0.25.epochs_run"
+  },
+  {
+   "element": "port_det_0.25 kept epoch (panel a text, panels b/c marker)",
+   "value": 3,
+   "source": "replication/megxl/code-review/result-review-11081640/recheck_metrics.json",
+   "key": "arms.port_det_0.25.selected_epoch_reapplied; = replication/megxl/code-review/result-review-11081640/cross_eval.json meta.port_det_0.25.ckpt_epoch_0based+1"
+  },
+  {
+   "element": "cross_eval orig_det_0.07 probe on orig/port/port_own features (caption)",
+   "value": [
+    0.21302521595949386,
+    0.21302521595949386,
+    0.21302521595949386
+   ],
+   "source": "replication/megxl/code-review/result-review-11081640/cross_eval.json",
+   "key": "table.orig_det_0.07|<field>.b50"
+  },
+  {
+   "element": "cross_eval port_det_0.07 probe on orig/port/port_own features (caption)",
+   "value": [
+    0.23211105521236877,
+    0.23211105521236877,
+    0.23211105521236877
+   ],
+   "source": "replication/megxl/code-review/result-review-11081640/cross_eval.json",
+   "key": "table.port_det_0.07|<field>.b50"
+  },
+  {
+   "element": "cross_eval port_own_0.07 probe on orig/port/port_own features (caption)",
+   "value": [
+    0.22487506170498164,
+    0.22487506170498164,
+    0.22487506170498164
+   ],
+   "source": "replication/megxl/code-review/result-review-11081640/cross_eval.json",
+   "key": "table.port_own_0.07|<field>.b50"
+  },
+  {
+   "element": "determinism repeat decision (panel b note)",
+   "value": "DETERMINISTIC_IN_WINDOW",
+   "source": "replication/megxl/post-review-11081640/determinism/result.json",
+   "key": "decision"
+  },
+  {
+   "element": "determinism repeat test b50 epoch 1 (panel b, 4 dp from hydra log)",
+   "value": 0.213,
+   "source": "replication/megxl/post-review-11081640/determinism/result.json",
+   "key": "per_epoch[epoch=1].test_r50_balanced.observed"
+  },
+  {
+   "element": "determinism repeat test b50 epoch 2 (panel b, 4 dp from hydra log)",
+   "value": 0.2152,
+   "source": "replication/megxl/post-review-11081640/determinism/result.json",
+   "key": "per_epoch[epoch=2].test_r50_balanced.observed"
+  },
+  {
+   "element": "determinism repeat test b50 epoch 3 (panel b, 4 dp from hydra log)",
+   "value": 0.1996,
+   "source": "replication/megxl/post-review-11081640/determinism/result.json",
+   "key": "per_epoch[epoch=3].test_r50_balanced.observed"
+  },
+  {
+   "element": "determinism repeat test b50 epoch 4 (panel b, 4 dp from hydra log)",
+   "value": 0.2154,
+   "source": "replication/megxl/post-review-11081640/determinism/result.json",
+   "key": "per_epoch[epoch=4].test_r50_balanced.observed"
+  },
+  {
+   "element": "determinism repeat test b50 epoch 5 (panel b, 4 dp from hydra log)",
+   "value": 0.2191,
+   "source": "replication/megxl/post-review-11081640/determinism/result.json",
+   "key": "per_epoch[epoch=5].test_r50_balanced.observed"
+  },
+  {
+   "element": "determinism repeat test b50 epoch 6 (panel b, 4 dp from hydra log)",
+   "value": 0.2291,
+   "source": "replication/megxl/post-review-11081640/determinism/result.json",
+   "key": "per_epoch[epoch=6].test_r50_balanced.observed"
+  },
+  {
+   "element": "determinism repeat test b50 epoch 7 (panel b, 4 dp from hydra log)",
+   "value": 0.2204,
+   "source": "replication/megxl/post-review-11081640/determinism/result.json",
+   "key": "per_epoch[epoch=7].test_r50_balanced.observed"
+  },
+  {
+   "element": "panel c threshold: epoch-1 val b250 + min_delta",
+   "value": 0.05474939205555234,
+   "source": "replication/megxl/nb3/run-0494230181b7/out/orig_det_0.07/test_metrics.json + replication/megxl/ref/MEG-XL-97da0417/configs/eval_criss_cross_word_classification_linear_probe_gwilliams.yaml",
+   "key": "evaluations[0].balanced_top10_accuracy_retrieval250 + training.min_delta"
+  }
+ ]
+}

@@ -1,0 +1,27 @@
+{
+  "citation": {
+    "authors": "Huang R., Cho S., Gohil C., Parker Jones O., Woolrich M.",
+    "title": "MEG-GPT: A transformer-based foundation model for magnetoencephalography data",
+    "journal": "Imaging Neuroscience",
+    "volume": 4,
+    "year": 2026,
+    "article_id": "IMAG.a.1301",
+    "doi": "10.1162/IMAG.a.1301",
+    "pmcid": "PMC13403652",
+    "license": "CC BY 4.0"
+  },
+  "location": "Fig. 8 ('MEG-GPT extracts features that enhance decoding accuracy') and the Section 3.5 paragraph that reports its values ('improved \"Within Subject\" accuracy from 0.54 (baseline) and 0.56 (baseline+PCA) to 0.59 and ... \"New Subject\" accuracy from 0.41 (baseline) and 0.45 (baseline+PCA) to 0.49'). The PMC full-text rendering has no page numbers; the article is cited by section and figure number.",
+  "local_copy": "replication/meggpt/paper/PMC13403652.txt",
+  "quoted_sentence": "In the zero-shot setting, simply using features from a pre-trained MEG-GPT improved \u201cWithin Subject\u201d accuracy from 0.54 (baseline) and 0.56 (baseline+PCA) to 0.59 and, more dramatically, \u201cNew Subject\u201d accuracy from 0.41 (baseline) and 0.45 (baseline+PCA) to 0.49.",
+  "notes": [
+    "Values are printed in the text to two decimals; Fig. 8 shows them as bars with 95% CIs over sessions, but the CI values are not printed, so no error bar is plotted for the paper column.",
+    "Fig. 8 chance level: 0.25 (red dotted line in the paper figure; four-way classification).",
+    "The paper's fine-tuned cell (new subject 0.51) is not part of this figure: the replication did not run it."
+  ],
+  "values": {
+    "baseline": {"within": 0.54, "new": 0.41},
+    "baseline_pca": {"within": 0.56, "new": 0.45},
+    "zeroshot": {"within": 0.59, "new": 0.49}
+  },
+  "chance": 0.25
+}

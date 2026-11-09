@@ -1,0 +1,167 @@
+{
+ "paper_value": 0.5429,
+ "paper_sem": 0.0031,
+ "chance": 0.5,
+ "cells": {
+  "full-appA": {
+   "seeds": [
+    42,
+    43,
+    44,
+    45,
+    46
+   ],
+   "authors_per_seed": [
+    0.6452347551156586,
+    0.6526068474683849,
+    0.6403112781624544,
+    0.6389739379244253,
+    0.6491278774415176
+   ],
+   "authors_mean": 0.6452509392224882,
+   "authors_sd": 0.005765008557787111,
+   "port_per_seed": [
+    0.6452347551156586,
+    0.6526068474683849,
+    0.6403112781624544,
+    0.6389739379244253,
+    0.6491278774415176
+   ],
+   "port_mean": 0.6452509392224882,
+   "port_sd": 0.005765008557787111,
+   "osf_probe_py_s42": 0.6403260377932851,
+   "n_test_windows": 14934,
+   "test_subjects": [
+    23,
+    24,
+    25,
+    26,
+    27
+   ]
+  },
+  "full-code": {
+   "seeds": [
+    42,
+    43,
+    44,
+    45,
+    46
+   ],
+   "authors_per_seed": [
+    0.6142051808702875,
+    0.6104349190741536,
+    0.617667103647043,
+    0.6214725839853444,
+    0.6055557018244047
+   ],
+   "authors_mean": 0.6138670978802466,
+   "authors_sd": 0.0061898489194958635,
+   "port_per_seed": [
+    0.6142051808702875,
+    0.6104349190741536,
+    0.617667103647043,
+    0.6120978809316752,
+    0.6055557018244047
+   ],
+   "port_mean": 0.6119921572695127,
+   "port_sd": 0.004499072594216452,
+   "osf_probe_py_s42": 0.6132242610216686,
+   "n_test_windows": 74735,
+   "test_subjects": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27
+   ]
+  }
+ },
+ "checks": [
+  {
+   "check": "paper value equals digitised Fig. 3 rightmost Gwilliams point to 4 dp",
+   "ok": true
+  },
+  {
+   "check": "paper SEM equals digitised error bar half-height to 4 dp",
+   "ok": true
+  },
+  {
+   "check": "full-appA: recompute per-seed (authors) rounds to summary2",
+   "ok": true
+  },
+  {
+   "check": "full-appA: recompute per-seed (port) rounds to summary2",
+   "ok": true
+  },
+  {
+   "check": "full-appA: authors mean/SD recomputed from per-seed",
+   "ok": true
+  },
+  {
+   "check": "full-appA: port mean/SD recomputed from per-seed",
+   "ok": true
+  },
+  {
+   "check": "full-appA: OSF probe.py recompute rounds to summary2",
+   "ok": true
+  },
+  {
+   "check": "full-code: recompute per-seed (authors) rounds to summary2",
+   "ok": true
+  },
+  {
+   "check": "full-code: recompute per-seed (port) rounds to summary2",
+   "ok": true
+  },
+  {
+   "check": "full-code: authors mean/SD recomputed from per-seed",
+   "ok": true
+  },
+  {
+   "check": "full-code: port mean/SD recomputed from per-seed",
+   "ok": true
+  },
+  {
+   "check": "full-code: OSF probe.py recompute rounds to summary2",
+   "ok": true
+  }
+ ],
+ "sources": {
+  "S2": "results/final-d74c02f6/summary2.json",
+  "SBS": "results/final-d74c02f6/side_by_side.tsv",
+  "FS": "results/final-d74c02f6/FINAL_SUMMARY.json",
+  "RC": "code-review/result-review-d74c02f6/recompute/recompute.json",
+  "PR2": "results/final-d74c02f6/full-code/per_run2.tsv",
+  "FD": "code-review/result-review-d74c02f6/first_divergence.tsv",
+  "WCC": "nb/results/nb-d74c02f6.port-388ac6cb/full-appA/check/window_crosscheck196.json",
+  "LC": "nb/results/nb-de08ad14.port-388ac6cb/full-appA/check/label_check196.json",
+  "RJ": "nb/results/nb-d74c02f6.port-388ac6cb/full-appA/authors-s42/result.json",
+  "DIG": "paper/digitized.json",
+  "ICML": "paper/icml.txt",
+  "SEANET": "ref/the-brains-bitter-lesson/models/seanet/seanet.py",
+  "FINAL": "FINAL.md",
+  "REVIEW": "code-review/result-review-d74c02f6/REVIEW.md"
+ }
+}
