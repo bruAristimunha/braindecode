@@ -47,7 +47,7 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
     :math:`H_S` = ``H - spatial_kernel_size + 1`` tokens, one per group of
     neighbouring channels, and :math:`\mathrm{Conv}_C`
     (``to_channel_embedding``) :math:`H_C = H` tokens, one per channel; each
-    token of :math:`W_S \times C_S` features is projected to ``dim`` and
+    token of :math:`W_S \times C_S` features is projected to ``embed_dim`` and
     normalized. Each branch adds a class token and a learned positional
     embedding and runs ``depth`` pre-norm transformer blocks with bias-free
     q/k/v; the two pooled vectors are concatenated, normalized
@@ -75,29 +75,29 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
     ``mlp_head.{0,1}`` to ``final_norm``/``final_layer``. The port then
     matches the authors' model to float32 rounding (max-abs <= 3.3e-07).
     The attention always projects its output (the authors skip it when
-    ``heads=1`` and ``dim_head=dim``). ``n_chromophores=1``, the clamp of
-    ``spatial_kernel_size`` and ``mask`` are additions of the port;
+    ``num_heads=1`` and ``head_dim=embed_dim``). ``n_chromophores=1``, the
+    clamp of ``spatial_kernel_size`` and ``mask`` are additions of the port;
     ``ch_mask`` is refused, as every layer spans the whole montage.
 
     `License <https://github.com/wzhlearning/fNIRS-Transformer/blob/main/LICENSE>`_
 
     Parameters
     ----------
-    dim : int, default=64
+    embed_dim : int, default=64
         Authors' ``dim``, "last dimension of output tensor after linear
         transformation"; 64 for their datasets A and B, 128 for C.
     depth : int, default=6
         Authors' ``depth``, "number of Transformer blocks" per branch.
-    heads : int, default=8
+    num_heads : int, default=8
         Authors' ``heads``, "number of the multi-head self-attention".
     mlp_dim : int, default=64
         Authors' ``mlp_dim``, "dimension of the MLP layer".
     pool : {"cls", "mean"}, default="cls"
-        Authors' ``pool``: "'cls' is [CLS] token pooling, 'mean' is average
-        pooling", per branch.
-    dim_head : int, default=64
+        Readout of each branch (authors' ``pool``): ``"cls"``, its class
+        token; ``"mean"``, the mean over its tokens (class token included).
+    head_dim : int, default=64
         Authors' ``dim_head``: width of each attention head.
-    conv_channels : int, default=8
+    n_conv_filters : int, default=8
         :math:`C_S = C_C`, feature maps of both convolutions (authors: 8).
     spatial_kernel_size : int, default=5
         Height of :math:`\mathrm{Conv}_S` in channels (authors: 5), clamped to
@@ -115,7 +115,7 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
         ``None`` reads it from ``chs_info``.
     drop_prob : float, default=0.0
         Authors' ``dropout`` in the attention and feed-forward sub-layers.
-    emb_drop_prob : float, default=0.0
+    embed_drop_prob : float, default=0.0
         Authors' ``emb_dropout``, "dropout for patch embeddings".
     activation : type[nn.Module], default=nn.GELU
         Activation of the feed-forward sub-layers (authors: GELU).
@@ -148,7 +148,7 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
     .. footbibliography::
     """
 
-    _preblock = False  # FNIRSPreT prepends the preprocessing module
+    _with_preprocessing = False  # FNIRSPreT prepends the preprocessing module
 
     def __init__(
         self,
@@ -159,20 +159,20 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
         input_window_seconds: float | None = None,
         sfreq: float | None = None,
         *,
-        dim: int = 64,
+        embed_dim: int = 64,
         depth: int = 6,
-        heads: int = 8,
+        num_heads: int = 8,
         mlp_dim: int = 64,
         pool: Literal["cls", "mean"] = "cls",
-        dim_head: int = 64,
-        conv_channels: int = 8,
+        head_dim: int = 64,
+        n_conv_filters: int = 8,
         spatial_kernel_size: int = 5,
         temporal_kernel_size: int = 30,
         temporal_stride: int = 4,
         n_chromophores: int = 2,
         channel_order: Literal["stacked", "interleaved"] | None = None,
         drop_prob: float = 0.0,
-        emb_drop_prob: float = 0.0,
+        embed_drop_prob: float = 0.0,
         activation: type[nn.Module] = nn.GELU,
     ) -> None:
         super().__init__(
@@ -200,22 +200,26 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
             f"batch {channel_axes} time -> batch chrom chans time",
             chrom=n_chromophores,
         )
-        n_phys_chans = self.n_chans // n_chromophores
+        n_pairs = self.n_chans // n_chromophores
         self.pool = pool
         n_bins = (self.n_times - temporal_kernel_size) // temporal_stride + 1
-        spatial_kernel = min(spatial_kernel_size, n_phys_chans)
-        self.pre = _PreBlock(self.n_times, n_chromophores) if self._preblock else None
+        spatial_kernel = min(spatial_kernel_size, n_pairs)
+        self.pre = (
+            _PreprocessingModule(self.n_times, n_chromophores)
+            if self._with_preprocessing
+            else None
+        )
 
         def branch() -> nn.Sequential:
             return nn.Sequential(
                 *[
                     PreNormTransformerBlock(
-                        dim,
+                        embed_dim,
                         MultiHeadAttention(
-                            dim, heads, head_dim=dim_head, qkv_bias=False
+                            embed_dim, num_heads, head_dim=head_dim, qkv_bias=False
                         ),
                         FeedForwardBlock(
-                            dim, 1, drop_prob, activation, hidden_features=mlp_dim
+                            embed_dim, 1, drop_prob, activation, hidden_features=mlp_dim
                         ),
                         drop_prob,
                     )
@@ -226,40 +230,42 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
         self.to_patch_embedding = nn.Sequential(
             nn.Conv2d(
                 n_chromophores,
-                conv_channels,
+                n_conv_filters,
                 (spatial_kernel, temporal_kernel_size),
                 (1, temporal_stride),
             ),
             Rearrange("batch maps tokens bins -> batch tokens (maps bins)"),
-            nn.Linear(n_bins * conv_channels, dim),
-            nn.LayerNorm(dim),
+            nn.Linear(n_bins * n_conv_filters, embed_dim),
+            nn.LayerNorm(embed_dim),
         )
-        self.cls_token_patch = nn.Parameter(torch.empty(1, 1, dim))
+        self.cls_token_patch = nn.Parameter(torch.empty(1, 1, embed_dim))
         self.pos_embedding_patch = nn.Parameter(
-            torch.empty(1, n_phys_chans - spatial_kernel + 2, dim)
+            torch.empty(1, n_pairs - spatial_kernel + 2, embed_dim)
         )
-        self.dropout_patch = nn.Dropout(emb_drop_prob)
+        self.dropout_patch = nn.Dropout(embed_drop_prob)
         self.transformer_patch = branch()
 
         self.to_channel_embedding = nn.Sequential(
             nn.Conv2d(
                 n_chromophores,
-                conv_channels,
+                n_conv_filters,
                 (1, temporal_kernel_size),
                 (1, temporal_stride),
             ),
             Rearrange("batch maps tokens bins -> batch tokens (maps bins)"),
-            nn.Linear(n_bins * conv_channels, dim),
-            nn.LayerNorm(dim),
+            nn.Linear(n_bins * n_conv_filters, embed_dim),
+            nn.LayerNorm(embed_dim),
         )
-        self.cls_token_channel = nn.Parameter(torch.empty(1, 1, dim))
-        self.pos_embedding_channel = nn.Parameter(torch.empty(1, n_phys_chans + 1, dim))
-        self.dropout_channel = nn.Dropout(emb_drop_prob)
+        self.cls_token_channel = nn.Parameter(torch.empty(1, 1, embed_dim))
+        self.pos_embedding_channel = nn.Parameter(
+            torch.empty(1, n_pairs + 1, embed_dim)
+        )
+        self.dropout_channel = nn.Dropout(embed_drop_prob)
         self.transformer_channel = branch()
 
-        self.token_mean = Reduce("batch tokens dim -> batch dim", "mean")
-        self.final_norm = nn.LayerNorm(dim * 2)
-        self.final_layer = nn.Linear(dim * 2, self.n_outputs)
+        self.token_mean = Reduce("batch tokens embed_dim -> batch embed_dim", "mean")
+        self.final_norm = nn.LayerNorm(embed_dim * 2)
+        self.final_layer = nn.Linear(embed_dim * 2, self.n_outputs)
         self._init_parameters()
 
     def _init_parameters(self) -> None:
@@ -285,40 +291,44 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
         True samples are zeroed first. ``ch_mask`` is refused: the spatial
         kernel and positional tables span every channel. ``return_features``
         gives the normalized pooled ``"features"`` and, as ``"cls_token"``, the
-        two branches' class tokens ``(batch, 2 * dim)``."""
+        two branches' class tokens ``(batch, 2 * embed_dim)``."""
         if ch_mask is not None:
             raise ValueError("FNIRST does not accept ch_mask (fixed channel layout).")
         if mask is not None:
             x = x.masked_fill(mask, 0.0)  # (batch, n_chans, n_times)
-        # (batch, n_chans, n_times) -> (batch, n_chromophores, n_phys_chans, n_times)
+        # (batch, n_chans, n_times) -> (batch, n_chromophores, n_pairs, n_times)
         x = self.to_chromophore_planes(x)
         if self.pre is not None:
-            x = self.pre(x)  # (batch, n_chromophores, n_phys_chans, n_times)
+            x = self.pre(x)  # (batch, n_chromophores, n_pairs, n_times)
         batch_size = x.shape[0]
-        # spatial level, n_groups = n_phys_chans - spatial_kernel_size + 1 tokens
-        patch = self.to_patch_embedding(x)  # (batch, n_groups, dim)
-        cls_patch = self.cls_token_patch.expand(batch_size, -1, -1)  # (batch, 1, dim)
-        patch = torch.cat((cls_patch, patch), dim=1)  # (batch, n_groups + 1, dim)
-        patch = patch + self.pos_embedding_patch  # (batch, n_groups + 1, dim)
-        patch = self.dropout_patch(patch)  # (batch, n_groups + 1, dim)
-        patch = self.transformer_patch(patch)  # (batch, n_groups + 1, dim)
-        # channel level, n_tokens = n_phys_chans + 1
-        channel = self.to_channel_embedding(x)  # (batch, n_phys_chans, dim)
+        # spatial level, n_groups = n_pairs - spatial_kernel_size + 1 tokens
+        patch = self.to_patch_embedding(x)  # (batch, n_groups, embed_dim)
+        # (1, 1, embed_dim) -> (batch, 1, embed_dim)
+        cls_patch = self.cls_token_patch.expand(batch_size, -1, -1)
+        # -> (batch, n_groups + 1, embed_dim)
+        patch = torch.cat((cls_patch, patch), dim=1)
+        patch = patch + self.pos_embedding_patch  # (batch, n_groups + 1, embed_dim)
+        patch = self.dropout_patch(patch)  # (batch, n_groups + 1, embed_dim)
+        patch = self.transformer_patch(patch)  # (batch, n_groups + 1, embed_dim)
+        # channel level, n_tokens = n_pairs + 1
+        channel = self.to_channel_embedding(x)  # (batch, n_pairs, embed_dim)
         cls_channel = self.cls_token_channel.expand(batch_size, -1, -1)
-        channel = torch.cat((cls_channel, channel), dim=1)  # (batch, n_tokens, dim)
-        channel = channel + self.pos_embedding_channel  # (batch, n_tokens, dim)
-        channel = self.dropout_channel(channel)  # (batch, n_tokens, dim)
-        channel = self.transformer_channel(channel)  # (batch, n_tokens, dim)
-        patch_token = patch[:, 0]  # (batch, dim)
-        channel_token = channel[:, 0]  # (batch, dim)
-        cls_tokens = torch.cat((patch_token, channel_token), dim=1)  # (batch, 2 * dim)
+        # -> (batch, n_tokens, embed_dim)
+        channel = torch.cat((cls_channel, channel), dim=1)
+        channel = channel + self.pos_embedding_channel  # (batch, n_tokens, embed_dim)
+        channel = self.dropout_channel(channel)  # (batch, n_tokens, embed_dim)
+        channel = self.transformer_channel(channel)  # (batch, n_tokens, embed_dim)
+        patch_token = patch[:, 0]  # (batch, embed_dim)
+        channel_token = channel[:, 0]  # (batch, embed_dim)
+        # -> (batch, 2 * embed_dim)
+        cls_tokens = torch.cat((patch_token, channel_token), dim=1)
         if self.pool == "mean":
-            patch = self.token_mean(patch)  # (batch, dim)
-            channel = self.token_mean(channel)  # (batch, dim)
-            features = torch.cat((patch, channel), dim=1)  # (batch, 2 * dim)
+            patch = self.token_mean(patch)  # (batch, embed_dim)
+            channel = self.token_mean(channel)  # (batch, embed_dim)
+            features = torch.cat((patch, channel), dim=1)  # (batch, 2 * embed_dim)
         else:
             features = cls_tokens
-        features = self.final_norm(features)  # (batch, 2 * dim)
+        features = self.final_norm(features)  # (batch, 2 * embed_dim)
         if return_features:
             return {"features": features, "cls_token": cls_tokens}
         return self.final_layer(features)  # (batch, n_outputs)
@@ -351,9 +361,9 @@ class FNIRSPreT(FNIRST, license="mit"):  # the kwarg is not inherited
     (``pre``) first, as the authors' ``fNIRS_PreT`` (``PreBlock``, then
     ``fNIRS_T``):
 
-    - ``pre.smooth``: three moving averages along time (``AvgPool1d`` with
-      kernels 5, 13 and 7, stride 1, "same" padding), shared by HbO and HbR
-      (the authors' ``pool1``, ``pool2``, ``pool3``);
+    - ``pre.average_pooling``: three moving averages along time
+      (``AvgPool1d`` with kernels 5, 13 and 7, stride 1, "same" padding),
+      shared by HbO and HbR (the authors' ``pool1``, ``pool2``, ``pool3``);
     - ``pre.norms.0`` and ``pre.norms.1``: one LayerNorm over the
       ``n_times`` samples per chromophore (the authors' ``ln_0``, ``ln_1``),
       so its weights are tied to ``n_times``.
@@ -390,15 +400,15 @@ class FNIRSPreT(FNIRST, license="mit"):  # the kwarg is not inherited
     .. footbibliography::
     """
 
-    _preblock = True
+    _with_preprocessing = True
 
 
-class _PreBlock(nn.Module):
+class _PreprocessingModule(nn.Module):
     """The authors' preprocessing module: moving averages, then LayerNorm over time."""
 
     def __init__(self, n_times: int, n_chromophores: int) -> None:
         super().__init__()
-        self.smooth = nn.Sequential(  # "same" padding
+        self.average_pooling = nn.Sequential(  # "same" padding
             nn.AvgPool1d(5, stride=1, padding=2),
             nn.AvgPool1d(13, stride=1, padding=6),
             nn.AvgPool1d(7, stride=1, padding=3),
@@ -410,9 +420,9 @@ class _PreBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         planes = []
         for chromophore, norm in enumerate(self.norms):
-            plane = x[:, chromophore]  # (batch, n_phys_chans, n_times)
-            plane = self.smooth(plane)  # (batch, n_phys_chans, n_times)
-            plane = norm(plane)  # (batch, n_phys_chans, n_times)
+            plane = x[:, chromophore]  # (batch, n_pairs, n_times)
+            plane = self.average_pooling(plane)  # (batch, n_pairs, n_times)
+            plane = norm(plane)  # (batch, n_pairs, n_times)
             planes.append(plane)
-        # (batch, n_chromophores, n_phys_chans, n_times)
+        # (batch, n_chromophores, n_pairs, n_times)
         return torch.stack(planes, dim=1)

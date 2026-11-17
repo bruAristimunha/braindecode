@@ -6533,7 +6533,7 @@ def test_fnirst_seeded_reset_and_cls_tokens(model_cls):
     """A seeded reset_parameters() repeats the seeded constructor; cls_token is
     the two branches' CLS tokens, not the pooled features."""
     torch.manual_seed(1)
-    model = model_cls(n_chans=4, n_outputs=2, n_times=60, depth=1, heads=2)
+    model = model_cls(n_chans=4, n_outputs=2, n_times=60, depth=1, num_heads=2)
     built = {k: v.clone() for k, v in model.state_dict().items()}
     torch.manual_seed(1)
     model.reset_parameters()
@@ -6589,7 +6589,7 @@ def test_fnirs_masks(model_cls):
 
 def test_jung_mae_reset_head_initializes_as_the_constructor():
     """reset_head draws the head as the constructor: Xavier, zero bias."""
-    model = JungMAE(n_chans=6, n_outputs=2, n_times=60, encoder_layers=1)
+    model = JungMAE(n_chans=6, n_outputs=2, n_times=60, depth=1)
     model.reset_head(3)
     assert not model.final_layer.bias.any()
 
