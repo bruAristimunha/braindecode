@@ -6738,6 +6738,14 @@ def test_geonirs_without_geometry_has_no_dead_parameters():
     assert all(p.grad is not None and torch.isfinite(p.grad).all() for p in model.parameters())
 
 
+def test_geonirs_refuses_a_bad_pool_or_geometry_count():
+    with pytest.raises(ValueError, match="pool must be"):
+        GeoNIRS(chs_info=_fnirs_chs_info(2), n_outputs=2, n_times=60, pool="mean")
+    model = GeoNIRS(chs_info=_fnirs_chs_info(2), n_outputs=2, n_times=60)
+    with pytest.raises(ValueError, match="geometry and x have different channel counts"):
+        model(torch.randn(1, 4, 60), geometry=torch.zeros(3, 6))
+
+
 def test_mtrenirs_chromophores_and_valid_window_pooling():
     """HbO/HbR come from the names, NaN windows do not dilute the pooling,
     and an odd head_dim is refused."""
@@ -6821,6 +6829,8 @@ def test_fnirs_released_checkpoints_match_the_authors_code(file, cls, kwargs, ex
     with torch.no_grad():
         features = model(x, return_features=True)["features"]
     torch.testing.assert_close(features[:, :4], torch.tensor(expected), rtol=0, atol=1e-5)
+
+
 def _tccnet_reference(model, x, mask_value):
     """NumPy transcription of the TCCNet Keras layers (DSIP-UPatras/ICASSP2019_TCN
     @cd28909: ``Masking``, ``CausalConv1D``, ``MeanOverTime`` and
