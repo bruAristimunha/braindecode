@@ -256,7 +256,7 @@ _MODELS = [
     pytest.param(
         JungMAE,
         4,
-        {"encoder_layers": 1, "encoder_heads": 4, "encoder_dim": 64},
+        {"depth": 1, "num_heads": 4, "embed_dim": 64},
         False,
         id="JungMAE",
     ),

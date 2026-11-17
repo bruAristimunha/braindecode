@@ -40,9 +40,9 @@ class JungMAE(EEGModuleMixin, nn.Module):
     :footcite:`li2026geonirs`. It encodes channels independently with shared
     parameters and does not model channel geometry.
 
-    Each HbO/HbR pair is cut into patches of ``patch_samples`` time points;
+    Each HbO/HbR pair is cut into patches of ``patch_size`` time points;
     the HbO and HbR samples of a patch are interleaved
-    (``[HbO_t, HbR_t, ...]``), projected to ``encoder_dim`` (``patch_embed``)
+    (``[HbO_t, HbR_t, ...]``), projected to ``embed_dim`` (``patch_embed``)
     and given a sinusoidal patch position. A pre-norm Transformer
     (``encoder``) encodes the patches of each pair, with the same weights for
     every pair. A patch with fewer than ``minimum_patch_valid_fraction`` valid
@@ -58,7 +58,7 @@ class JungMAE(EEGModuleMixin, nn.Module):
     with validity masks; here NaN marks a missing sample (an all-NaN row, a
     missing channel) and the opt-in ``mask`` marks more. :meth:`encode`
     returns the reference's ``"foundation"``
-    ``(batch, n_pairs, n_patches, encoder_dim)`` and ``"valid"``. With
+    ``(batch, n_pairs, n_patches, embed_dim)`` and ``"valid"``. With
     ``jung_mae.pt`` the features equal the reference's in eval mode (max-abs
     0.0, with and without missing samples); in training mode the reference
     packs the visible tokens and the port masks keys, so dropout draws differ.
@@ -88,19 +88,19 @@ class JungMAE(EEGModuleMixin, nn.Module):
 
     Parameters
     ----------
-    patch_samples : int, default=10
+    patch_size : int, default=10
         Reference ``patch_samples``: samples per patch (2 s at 5 Hz).
     on_non_divisible : {"error", "pad", "crop"}, default="error"
-        A ``n_times`` that is not a multiple of ``patch_samples`` is refused
+        A ``n_times`` that is not a multiple of ``patch_size`` is refused
         (as the reference), zero-padded or cropped.
-    encoder_dim : int, default=192
+    embed_dim : int, default=192
         Reference ``encoder_dim``: token width.
-    encoder_layers : int, default=4
+    depth : int, default=4
         Reference ``encoder_layers``: Transformer layers.
-    encoder_heads : int, default=8
+    num_heads : int, default=8
         Reference ``encoder_heads``: attention heads per layer.
     mlp_ratio : float, default=4.0
-        Reference ``mlp_ratio``: feed-forward width over ``encoder_dim``.
+        Reference ``mlp_ratio``: feed-forward width over ``embed_dim``.
     channel_order : {"stacked", "interleaved"} or None, default=None
         ``[HbO_1..HbO_P, HbR_1..HbR_P]`` or MNE's ``[HbO_1, HbR_1, ...]``;
         ``None`` reads it from ``chs_info`` (``"stacked"`` without it).
@@ -151,11 +151,11 @@ class JungMAE(EEGModuleMixin, nn.Module):
         input_window_seconds: float | None = None,
         sfreq: float | None = None,
         *,
-        patch_samples: int = 10,
+        patch_size: int = 10,
         on_non_divisible: Literal["error", "pad", "crop"] = "error",
-        encoder_dim: int = 192,
-        encoder_layers: int = 4,
-        encoder_heads: int = 8,
+        embed_dim: int = 192,
+        depth: int = 4,
+        num_heads: int = 8,
         mlp_ratio: float = 4.0,
         channel_order: Literal["stacked", "interleaved"] | None = None,
         drop_prob: float = 0.1,
@@ -174,37 +174,36 @@ class JungMAE(EEGModuleMixin, nn.Module):
         del n_outputs, n_chans, chs_info, n_times, input_window_seconds, sfreq
         self.channel_order = fnirs_channel_order(self._chs_info, channel_order)
         if self.n_chans % 2:
-            raise ValueError(
-                "JungMAE needs HbO/HbR pairs: n_chans must be even."
-            )
+            raise ValueError("JungMAE needs HbO/HbR pairs: n_chans must be even.")
         _check_on_non_divisible(on_non_divisible)
         self.on_non_divisible = on_non_divisible
-        self.patch_samples = patch_samples
-        self.min_valid_samples = math.ceil(patch_samples * minimum_patch_valid_fraction)
-        n_patches = patch_count(self.n_times, patch_samples, on_non_divisible)
-        self.patch_embed = nn.Linear(2 * patch_samples, encoder_dim)
+        self.patch_size = patch_size
+        self.min_valid_samples = math.ceil(patch_size * minimum_patch_valid_fraction)
+        n_patches = patch_count(self.n_times, patch_size, on_non_divisible)
+        self.patch_embed = nn.Linear(2 * patch_size, embed_dim)
         layer = nn.TransformerEncoderLayer(
-            encoder_dim,
-            encoder_heads,
-            int(encoder_dim * mlp_ratio),
+            embed_dim,
+            num_heads,
+            int(embed_dim * mlp_ratio),
             drop_prob,
             activation(),
             batch_first=True,
             norm_first=True,
         )
         self.encoder = nn.TransformerEncoder(
-            layer, encoder_layers, nn.LayerNorm(encoder_dim), enable_nested_tensor=False
+            layer, depth, nn.LayerNorm(embed_dim), enable_nested_tensor=False
         )
         self.sample_over_chromophores = Rearrange(
             "batch pairs time -> batch pairs time 1"
         )
         self.split_patches = Rearrange(
-            "batch pairs (patches samples) chrom -> (batch pairs) patches (samples chrom)",
-            samples=patch_samples,
+            "batch pairs (patches samples) chrom"
+            " -> (batch pairs) patches (samples chrom)",
+            samples=patch_size,
         )
         self.split_patch_mask = Rearrange(
             "batch pairs (patches samples) -> batch pairs patches samples",
-            samples=patch_samples,
+            samples=patch_size,
         )
         self.merge_pairs = Rearrange("batch pairs patches -> (batch pairs) patches")
         self.patch_over_features = Rearrange("rows patches -> rows patches 1")
@@ -213,7 +212,7 @@ class JungMAE(EEGModuleMixin, nn.Module):
         )
         self.head_dropout = nn.Dropout(head_drop_prob)
         self.final_layer = nn.Linear(
-            self.n_chans // 2 * n_patches * encoder_dim, self.n_outputs
+            self.n_chans // 2 * n_patches * embed_dim, self.n_outputs
         )
         self._init_parameters()
 
@@ -231,27 +230,28 @@ class JungMAE(EEGModuleMixin, nn.Module):
         self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
     ) -> dict[str, torch.Tensor]:
         """``(batch, n_chans, n_times)`` -> ``"foundation"`` ``(batch,
-        n_chans // 2, n_patches, encoder_dim)`` (zero at invalid patches) and
+        n_chans // 2, n_patches, embed_dim)`` (zero at invalid patches) and
         ``"valid"`` ``(batch, n_chans // 2, n_patches)``. ``mask`` (bool, same
         shape as ``x``): True samples count as missing."""
         if mask is not None:
             x = x.masked_fill(mask, float("nan"))
-        # (batch, n_chans, n_times) -> (batch, n_chans, n_patches * patch_samples)
-        x = pad_or_crop_to_patches(x, self.patch_samples, self.on_non_divisible)
-        # -> 2 x (batch, n_pairs, n_patches * patch_samples)
+        # (batch, n_chans, n_times) -> (batch, n_chans, n_patches * patch_size)
+        x = pad_or_crop_to_patches(x, self.patch_size, self.on_non_divisible)
+        # -> 2 x (batch, n_pairs, n_patches * patch_size)
         hbo, hbr = fnirs_split_hbo_hbr(x, self.channel_order)
         batch_size, n_pairs, _ = hbo.shape
         hbo_finite = torch.isfinite(hbo)
         hbr_finite = torch.isfinite(hbr)
-        # (batch, n_pairs, n_patches * patch_samples): both chromophores finite
+        # (batch, n_pairs, n_patches * patch_size): both chromophores finite
         valid = hbo_finite & hbr_finite
-        # -> (batch, n_pairs, n_patches * patch_samples, 2)
+        # -> (batch, n_pairs, n_patches * patch_size, 2)
         signal = torch.stack((hbo, hbr), dim=-1)
         valid_over_chromophores = self.sample_over_chromophores(valid)
         signal = torch.where(valid_over_chromophores, signal, 0.0)
-        # -> (batch * n_pairs, n_patches, 2 * patch_samples): [HbO_t, HbR_t, ...]
+        # -> (batch * n_pairs, n_patches, 2 * patch_size): [HbO_t, HbR_t, ...]
         patches = self.split_patches(signal)
-        # (batch, n_pairs, n_patches * patch_samples) -> (batch, n_pairs, n_patches, patch_samples)
+        # (batch, n_pairs, n_patches * patch_size)
+        # -> (batch, n_pairs, n_patches, patch_size)
         valid_patches = self.split_patch_mask(valid)
         # -> (batch, n_pairs, n_patches)
         n_valid_samples = valid_patches.sum(dim=-1)
@@ -259,9 +259,10 @@ class JungMAE(EEGModuleMixin, nn.Module):
         # -> (batch * n_pairs, n_patches)
         rows_valid = self.merge_pairs(patch_valid)
         n_patches = patches.shape[1]
-        # (batch * n_pairs, n_patches, 2 * patch_samples) -> (batch * n_pairs, n_patches, encoder_dim)
+        # (batch * n_pairs, n_patches, 2 * patch_size)
+        # -> (batch * n_pairs, n_patches, embed_dim)
         tokens = self.patch_embed(patches)
-        # (n_patches, encoder_dim)
+        # (n_patches, embed_dim)
         positions = sinusoidal_positional_encoding(
             n_patches, tokens.shape[-1], device=x.device, dtype=tokens.dtype
         )
@@ -276,7 +277,8 @@ class JungMAE(EEGModuleMixin, nn.Module):
         weight = self.patch_over_features(rows_valid)
         weight = weight.to(encoded.dtype)
         encoded = encoded * weight
-        # (batch * n_pairs, n_patches, encoder_dim) -> (batch, n_pairs, n_patches, encoder_dim)
+        # (batch * n_pairs, n_patches, embed_dim)
+        # -> (batch, n_pairs, n_patches, embed_dim)
         foundation = encoded.unflatten(0, [batch_size, n_pairs])
         return {"foundation": foundation, "valid": patch_valid}
 
@@ -308,12 +310,10 @@ class JungMAE(EEGModuleMixin, nn.Module):
         :meth:`encode`. ``ch_mask`` is refused: ``final_layer`` spans every
         channel (mark a missing channel with NaN)."""
         if ch_mask is not None:
-            raise ValueError(
-                "JungMAE does not accept ch_mask; use NaN channels."
-            )
-        # (batch, n_chans, n_times) -> (batch, n_pairs, n_patches, encoder_dim)
+            raise ValueError("JungMAE does not accept ch_mask; use NaN channels.")
+        # (batch, n_chans, n_times) -> (batch, n_pairs, n_patches, embed_dim)
         foundation = self.encode(x, mask)["foundation"]
-        # -> (batch, n_pairs * n_patches * encoder_dim)
+        # -> (batch, n_pairs * n_patches * embed_dim)
         features = self.flatten_tokens(foundation)
         features = self.head_dropout(features)
         if return_features:
