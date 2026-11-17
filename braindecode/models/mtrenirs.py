@@ -40,107 +40,141 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
 
     .. versionadded:: 2.1
 
-    MtReNIRS is "a self-supervised foundation model for transferable
-    neurovascular representations" :footcite:`microsoft2026mtrenirs`. This
-    class is its encoder with a linear head; the masked-autoencoder decoder of
-    pretraining is not part of it.
+    .. figure:: https://braindecode.org/dev/_static/model/mtrenirs.png
+       :align: center
+       :alt: MtReNIRS preprocessing, montage harmonization, token embedding and pretraining
 
-    **Tokens.** "We represented each token by a chromophore channel :math:`c`
-    and temporal window :math:`t`, where :math:`c = (i, b_c)` identifies an
-    S-D pair :math:`i` and chromophore type :math:`b_c \in \{0, 1\}`, with 0
-    and 1 denoting HbO and HbR, respectively." "Each 10-s signal segment
-    :math:`x_{c,t} \in \mathbb{R}^{100}` was projected by a linear layer to a
-    128-dimensional signal embedding." The canonical spatial coordinate
-    :math:`q_c \in \mathbb{R}^3` of the pair is concatenated "with the binary
-    chromophore indicator :math:`b_c` to form
-    :math:`u_c = [q_c^\top, b_c]^\top \in \mathbb{R}^4`", encoded "with six
-    bands of Fourier features"
+       Fig. 2 of the paper (`CC BY 4.0 <https://creativecommons.org/licenses/by/4.0/>`_):
+       "(A) fNIRS pre-processing pipeline, (B) harmonization pipeline of
+       heterogeneous montages, (C) deriving signal and spatio-chromophore token
+       embedding, and (D) masked pretraining and downstream transfer". This
+       class is the encoder of (C)-(D) with a linear head.
 
-    .. math::
+    A montage-aware masked autoencoder for fNIRS. Each token is one 10-s window
+    :math:`x_{c,t} \in \mathbb{R}^{100}` of a chromophore channel
+    :math:`c = (i, b_c)`; "Each 10-s signal segment was projected by a linear
+    layer to a 128-dimensional signal embedding", to which an MLP of six
+    Fourier bands of :math:`u_c = [q_c^\top, b_c]^\top` (10-05 slot position
+    and HbO/HbR flag) is added. Six pre-norm Transformer blocks with per-head
+    QK LayerNorm follow, and "rotary position encoding (RoPE) with base 500
+    encoded the temporal-window index" :footcite:`su2024roformer`.
 
-        \phi(u_c) = \left[\sin(2^k \pi u_{c,j}), \cos(2^k \pi u_{c,j})\right]
-        _{j = 1, \dots, 4}^{k = 0, \dots, 5} \in \mathbb{R}^{48},
+    **Mapping.** Input ``(batch, n_chans, n_times)``, one row per HbO or HbR
+    channel in any order, cut into ``n_times // window_samples`` windows.
+    :math:`q_c` is ``loc[:3]`` (metres) of ``chs_info``, read as given (the
+    reference first snaps each channel to its nearest 10-05 slot,
+    ``mtrenirs-alignment``); :math:`b_c` comes from ``coil_type`` or the
+    channel name. Without locations, pass ``coordinates`` to :meth:`forward`.
+    Channels without a location and windows with a NaN are left out of the
+    attention, as in the reference. The default ``pool="temporal_mean"``
+    feeds ``final_layer`` the paper's linear-probe input (one window per
+    trial); ``"channel_temporal_mean"`` is added here for ``ch_mask``. The
+    decoder and masking of pretraining are left out. State-dict keys are the
+    authors' (no ``mapping``), and :meth:`load_state_dict` takes the released
+    ``{"config", "model"}`` payload strictly; the head keeps its init.
 
-    and "a 48 -> 128 -> 128 multilayer perceptron (MLP) with GELU activation
-    projected these features". "We summed the signal and spatio-chromophore
-    embeddings to form token :math:`z_{c,t} \in \mathbb{R}^{128}`."
+    =============  ==================  ======================  ===================
+    Token length   ``window_samples``  SujinBak LOSO macro-F1  Weights
+    =============  ==================  ======================  ===================
+    2 s            20                  62.3                    not released
+    5 s            50                  65.0                    not released
+    10 s           100                 67.9                    ``mtrenirs_10s.pt``
+    =============  ==================  ======================  ===================
 
-    **Encoder.** "The encoder contained six pre-layer-normalized Transformer
-    blocks with a 128-dimensional state, four attention heads, a
-    512-dimensional MLP, and 0.1 dropout. Per-head layer normalization
-    stabilized queries and keys. To preserve cross-window order without
-    conflating time with spatial identity, rotary position encoding (RoPE)
-    with base 500 encoded the temporal-window index. All S-D pairs from the
-    same window shared that index; spatial identity entered only through the
-    canonical coordinate embedding."
+    .. important::
+       ``mtrenirs_10s.pt`` (MIT) is mirrored at `braindecode/mtrenirs-pretrained
+       <https://huggingface.co/braindecode/mtrenirs-pretrained>`_. It expects
+       10 Hz HbO/HbR, preprocessed as in Notes, in 100-sample windows:
 
-    **Input.** ``(batch, n_chans, n_times)`` HbO/HbR channels. Positions
-    (``loc[:3]``, metres) and HbO/HbR (from ``coil_type``, else the channel
-    name) come from ``chs_info`` or the ``coordinates`` argument; a montage
-    without any location needs ``coordinates``. As in the reference, a channel
-    without a location (NaN or all-zero ``loc[:3]``, NaN in ``coordinates``)
-    is left out of the attention and its tokens are zero. Windows with a NaN
-    sample are masked.
+       .. code-block:: python
 
-    :meth:`load_state_dict` takes the official ``mtrenirs_10s.pt`` checkpoint.
-    The paper's preprocessing, which its weights expect: the modified
-    Beer-Lambert law (PPF 6.0), then "we band-pass filtered each run from
-    0.01 to 0.5 Hz, resampled to 10 Hz", and "z-scored each retained
-    chromophore channel over its complete run using the population mean and
-    standard deviation, then clipped model inputs to :math:`[-6, 6]`", in
-    100-sample (10 s) windows. The released ``from_mne_raw`` does not apply
-    that band-pass: it calls MNE's default ``raw.filter(0.01, 0.5)``, an FIR
-    with a 2 Hz upper transition band that passes 0.87 of the amplitude at
-    1 Hz and 0.50 at 1.5 Hz. The paper's SujinBak results are reproduced with
-    a band-pass that removes the content above 0.5 Hz, such as the zero-phase
-    Butterworth
-    ``raw.filter(0.01, 0.5, method="iir", iir_params=dict(order=3, ftype="butter"))``
-    (:gh:`1564`). Positions are the paper's canonical 10-05 slots: the
-    reference snaps each channel to its nearest 10-05 position
-    (``mtrenirs-alignment``) before encoding, while this port reads
-    ``loc[:3]`` as given.
-    Adapted from the authors' code
-    (`License <https://github.com/microsoft/MtReNIRS/blob/main/LICENSE.txt>`_).
+           import torch
+           from huggingface_hub import hf_hub_download
+
+           from braindecode.models import MtReNIRS
+
+           path = hf_hub_download(
+               "braindecode/mtrenirs-pretrained",
+               "mtrenirs_10s.pt",
+               revision="bbc68ce5e00a4515081d900227fc06d111858e75",
+           )
+           payload = torch.load(path, map_location="cpu", weights_only=True)
+           # raw: MNE Raw with the 10-05 slot positions in loc[:3]
+           model = MtReNIRS(chs_info=raw.info["chs"], n_outputs=3, n_times=100, sfreq=10.0)
+           model.load_state_dict(payload)
+
+    `License <https://github.com/microsoft/MtReNIRS/blob/main/LICENSE.txt>`_
 
     Parameters
     ----------
     window_samples : int, default=100
-        Samples of the window :math:`x_{c,t}` of one token (10 s at 10 Hz).
+        Samples per token window :math:`x_{c,t}` (10 s at 10 Hz); ``data.t_win``.
     d_model : int, default=128
-        Width of the tokens and of the Transformer state.
+        Token and Transformer width; ``model.d_model``.
     depth : int, default=6
-        Pre-norm Transformer blocks.
+        Transformer blocks; ``model.encoder.depth``.
     n_heads : int, default=4
-        Attention heads; ``d_model // n_heads`` must be even for RoPE.
+        Attention heads, with an even ``d_model // n_heads`` for RoPE;
+        ``model.encoder.n_heads``.
     mlp_hidden : int, default=512
-        Width of the feed-forward MLP of each block.
+        Feed-forward width of each block; ``model.encoder.mlp_hidden``.
     fourier_num_bands : int, default=6
-        Fourier bands per coordinate, frequencies :math:`2^k \pi`,
-        :math:`k < 6`.
+        Fourier bands :math:`2^k \pi`, :math:`k < 6`, per coordinate of
+        :math:`u_c` (48 features); ``model.fourier_num_bands``.
     spatial_mlp_hidden : int, default=128
-        Hidden width of the spatio-chromophore MLP.
+        Hidden width of the 48 -> 128 -> 128 spatio-chromophore MLP;
+        ``model.spatial_mlp_hidden``.
     rope_base : float, default=500.0
-        Base of the rotary embedding of the window index.
+        RoPE base of the window index; ``model.rope_base``.
     qk_norm : bool, default=True
-        Per-head LayerNorm of queries and keys.
+        Per-head LayerNorm of queries and keys; ``model.qk_norm``.
     pool : {"temporal_mean", "channel_temporal_mean", "flatten"}, default="temporal_mean"
         Readout of the ``(batch, n_windows, n_chans, d_model)`` tokens: mean
-        over valid windows, over valid windows and channels (the readout
-        that takes ``ch_mask``), or all of them.
+        over valid windows, over valid windows and channels (takes
+        ``ch_mask``), or all tokens (the reference's ``"flatten"``).
     on_non_divisible : {"crop", "pad", "error"}, default="crop"
-        A last window shorter than ``window_samples`` is dropped (the
-        reference's ``remainder="drop"``), zero-padded (its ``"pad"``) or
-        refused.
+        A short last window is dropped (the reference's ``remainder="drop"``),
+        zero-padded (``"pad"``) or refused.
     pos_center : tuple of float
-        Centre (m) of the canonical coordinates; the paper normalizes them
-        "with one center and RMS scale computed from the pretraining corpus",
-        and the default is that of the released checkpoint.
+        Centre (m) subtracted from :math:`q_c`, computed on the pretraining
+        corpus; the checkpoint's ``data.pos_center``.
     pos_scale : float
-        RMS scale (m) of the canonical coordinates, as ``pos_center``.
+        RMS scale (m) dividing the centred :math:`q_c`; ``data.pos_scale``.
     drop_prob : float, default=0.1
-        Dropout of the attention weights and blocks.
+        Dropout of attention weights, attention output and MLP;
+        ``model.encoder.dropout``.
     activation : type[nn.Module], default=nn.GELU
-        Activation of the spatio-chromophore MLP and the feed-forward blocks.
+        Activation of the spatio-chromophore MLP and feed-forward blocks.
+
+    Notes
+    -----
+    Protocol (paper Sec. III): MBLL (PPF 6.0), "band-pass filtered each run
+    from 0.01 to 0.5 Hz, resampled to 10 Hz", per-channel z-score over the run,
+    clip to :math:`[-6, 6]`, windows [onset, onset + 10 s). Pretraining: 12
+    datasets (268 subjects, 567 h), 60-s crops, 25 % of tokens masked, AdamW,
+    100 epochs, batch 128, lr :math:`2 \times 10^{-4}`; epoch 95 selected on
+    the validation loss. Evaluation on SujinBak 2019 :footcite:`bak2019open`
+    (30 subjects, 3 classes): LOSO with ~15 % inner-validation subjects, 50
+    epochs, AdamW lr :math:`10^{-4}`, batch 32, best validation macro-F1; LP,
+    MLP (64 units), LoRA (r 8, :math:`\alpha` 16), Full-FT, Scratch-FT; and
+    2-8-shot linear probes (200 full-batch updates, 50 draws per subject).
+
+    The band-pass must remove content above 0.5 Hz: the released
+    ``from_mne_raw`` uses MNE's default FIR (0.87 of the amplitude passes at
+    1 Hz), which gives 61.1 (LOSO LP) and 35.1 (2-shot) instead of 68.3 and
+    40.3. A zero-phase Butterworth reproduces the paper (:gh:`1564`):
+    ``raw.filter(0.01, 0.5, method="iir", iir_params=dict(order=3, ftype="butter"))``.
+
+    Replication with this port and ``mtrenirs_10s.pt`` (macro-F1, %; LP/MLP
+    3 seeds, others 1; channels on their nearest 10-05 slots around C3/C4;
+    the authors' encoder gives identical features):
+
+    =========  =====  ====  ====  =======  ==========  ======  ======  ======  ======
+    \          LP     MLP   LoRA  Full-FT  Scratch-FT  2-shot  4-shot  6-shot  8-shot
+    =========  =====  ====  ====  =======  ==========  ======  ======  ======  ======
+    Paper      67.9   67.2  70.3  70.2     66.7        40.4    46.2    50.0    53.0
+    Port       68.3   67.4  69.3  69.6     67.8        40.3    46.6    50.4    53.0
+    =========  =====  ====  ====  =======  ==========  ======  ======  ======  ======
 
     References
     ----------
