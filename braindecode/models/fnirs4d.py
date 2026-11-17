@@ -24,58 +24,122 @@ from braindecode.models.util import (
 
 
 class FNIRS4D(EEGModuleMixin, nn.Module, license="apache-2.0"):
-    r"""fNIRS4D from Wang et al. (2026) :footcite:`wang2026fnirs4d`.
+    r"""fNIRS4D from Wang et al. (2026).
 
     :bdg-success:`Convolution` :bdg-secondary:`Recurrent`
 
     .. versionadded:: 2.1
 
-    From the abstract: "Diagonally structured state space sequence model
-    (S4D), simple and efficient diagonal versions of SSMs, are introduced to
-    the fNIRS domain. We incorporate domain knowledge into an S4D-based
-    lightweight fNIRS classification model named fNIRS4D."
+    .. figure:: https://braindecode.org/dev/_static/model/fnirs4d.png
+       :align: center
+       :alt: fNIRS4D architecture
 
-    The layers follow the authors' code. With ``compute_hbt``, the HbR half of
-    the montage becomes HbT = HbO + HbR, as their data loader does. The fNIRS
-    knowledge embedding (``fNIRS_knowledge_embedding``: a full-window
-    convolution, instance normalization and a :math:`1 \times 1` convolution)
-    gives one sequence per channel, processed by ``n_layers`` S4D layers
-    (S4D-Lin kernel, causal depthwise convolution, ``D`` skip, GLU and a
-    residual ``LayerNorm``). Their mean joins the mean hemoglobin branch
-    (``mean_hemoglobin_branch``) before ``final_layer``. The S4D kernel is
-    computed in real arithmetic (no complex tensors, no FFT). The parameter
-    names are the authors'; ``mapping`` loads their ``fc.0.*`` head, so their
-    ``state_dict`` loads with ``strict=True``.
+       ``fig/fig2.png`` of the authors' repository (wzhlearning/fNIRS4D,
+       ``eb13e5e``, Apache-2.0): "fNIRS4D for Signal Classification", with the
+       "Selectable Branches" MAMHB (inter-subject) and MHB (intra-subject).
 
-    `License <https://github.com/wzhlearning/fNIRS4D/blob/main/LICENSE>`_
+    From the abstract :footcite:`wang2026fnirs4d`: "Diagonally structured
+    state space sequence model (S4D), simple and efficient diagonal versions
+    of SSMs, are introduced to the fNIRS domain. We incorporate domain
+    knowledge into an S4D-based lightweight fNIRS classification model named
+    fNIRS4D." The S4D layer is that of Gu et al. :footcite:`gu2022s4d`.
+
+    The layers follow the authors' code (``fNIRS4D.py``); in the figure's terms:
+
+    - "Mixed Hemoglobin" input: ``n_chans`` rows (HbO and HbR per fNIRS
+      channel) by ``n_times``. ``compute_hbt=True`` makes the rows
+      [HbO, HbT = HbO + HbR], as the authors' data loader does; the HbO/HbR
+      pairing comes from ``channel_order`` or ``chs_info``.
+    - "Knowledge Embedding (KE)", ``fNIRS_knowledge_embedding``: a full-window
+      convolution with ``n_chans`` filters, instance normalization and a
+      :math:`1 \times 1` convolution; each row becomes a sequence over the
+      filters.
+    - "Knowledge Aggregation (KA)": ``n_layers`` S4D blocks (``s4d_layers``,
+      ``norms``: S4D convolution, ``D`` skip, GLU, dropout, residual,
+      ``LayerNorm``), then the mean over the sequence.
+    - "Mean Hemoglobin Branch (MHB)" is ``mean_branch="time_mean"``; the
+      "Multi-scale Aggregated" MAMHB is ``"multiscale"`` (``avg_1``,
+      ``avg_2``, ``conv_1``, ``conv_2``, BN, ELU). ``final_layer`` (FC) reads
+      both feature sets.
+
+    The names are the authors'; ``mapping`` renames their ``fc.0.*``, so an
+    authors' ``state_dict`` loads with ``strict=True``. No weights are
+    released. There is no sampling-rate argument (the authors: 3 s windows,
+    40 samples for UFFT, 30 for MA and WG). The S4D kernel is computed in real
+    arithmetic as a causal convolution (the authors: complex FFT), equal up to
+    float32 rounding.
+
+    The authors' configurations (``KFold_Train.py``, ``LOSO_Train.py``):
+
+    ===================  =======  =======  =======  ========  ================
+    Protocol             Dataset  n_chans  n_times  n_layers  mean_branch
+    ===================  =======  =======  =======  ========  ================
+    Subject-specific     UFFT     40       40       4         ``"time_mean"``
+    Subject-specific     MA, WG   72       30       4         ``"time_mean"``
+    Subject-independent  UFFT     40       40       4         ``"multiscale"``
+    Subject-independent  MA       72       30       4         ``"multiscale"``
+    Subject-independent  WG       72       30       1         ``"multiscale"``
+    ===================  =======  =======  =======  ========  ================
 
     Parameters
     ----------
     n_layers : int, default=4
-        Number of S4D layers (``n_layers`` in the authors' code).
+        Number of S4D blocks (the figure's :math:`N`, ``n_layers``).
     d_state : int, default=64
-        State dimension :math:`N` of each S4D kernel (even: conjugate pairs).
+        State size of each S4D kernel (``d_state``); even, as the kernel keeps
+        ``d_state // 2`` conjugate pairs.
     avg_size : int, default=10
-        Samples of the moving average of the ``"multiscale"`` branch, clamped
-        to ``n_times``.
+        Moving-average width of the ``"multiscale"`` branch (``avg_size_2``),
+        clamped to ``n_times``.
     drop_prob : float, default=0.5
-        Dropout of the S4D layers and of their residual branch.
+        Dropout in and after each S4D layer (``dropout``).
     prenorm : bool, default=False
-        ``LayerNorm`` before each S4D layer instead of after the residual sum.
+        ``LayerNorm`` before each S4D layer instead of after the residual
+        (``prenorm``; the authors' default is post-norm).
     compute_hbt : bool, default=True
-        Read the channels as HbO/HbR pairs (``channel_order``) and replace HbR
-        by HbT = HbO + HbR; needs an even ``n_chans``. ``False`` takes the
-        channels as they are (e.g. an [HbO, HbT] montage).
+        Replace HbR by HbT = HbO + HbR (needs an even ``n_chans``); ``False``
+        takes the rows as they are.
     channel_order : {"stacked", "interleaved"} or None, default=None
-        Pair order: ``[HbO..., HbR...]`` or ``[HbO_1, HbR_1, ...]`` (MNE);
-        ``None`` reads it from ``chs_info``.
+        ``[HbO..., HbR...]`` (the authors') or ``[HbO_1, HbR_1, ...]`` (MNE);
+        ``None`` reads ``chs_info``, else assumes ``"stacked"``.
     mean_branch : {"multiscale", "time_mean"}, default="multiscale"
-        Mean hemoglobin branch of the authors' code: ``"multiscale"`` (their
-        subject-independent ``LOSO-CV`` mode) convolves the channel mean and
-        its moving average over the window; ``"time_mean"`` (their
-        subject-specific ``KFold-CV`` mode) is the time mean of each channel.
-    activation, branch_activation : type[nn.Module], default=nn.GELU, nn.ELU
-        Activations of the S4D layers and of the mean hemoglobin branch.
+        The authors' ``mode``: ``"multiscale"`` is MAMHB (``"LOSO-CV"``),
+        ``"time_mean"`` is MHB (``"KFold-CV"``).
+    activation : type[nn.Module], default=nn.GELU
+        Activation inside each S4D layer.
+    branch_activation : type[nn.Module], default=nn.ELU
+        Activation of the ``"multiscale"`` branch.
+
+    Notes
+    -----
+    Protocol of the authors' released code (the TIM paper is not open
+    access): UFFT :footcite:`bak2019ufft`, MA :footcite:`shin2017openaccess`
+    and WG :footcite:`shin2018simultaneous`; their BBCI scripts (UFFT and MA
+    as for :class:`~braindecode.models.FNIRSNet`, WG low-pass 0.2 Hz), 3 s
+    windows with a 1 s step, HbT per window, then a z-score with the
+    training-set mean and std. Subject-specific: 5-fold CV over trial blocks,
+    AdamW (lr 0.001 UFFT, 0.0005 MA/WG), cross-entropy, batch 64, 120 epochs,
+    lr x 0.2 at epochs 20, 40, 60. Subject-independent: leave-one-subject-out,
+    batch 512, cosine lr over 30 epochs. Last-epoch test accuracy.
+
+    Replication: this port vs the authors' code on the same UFFT and WG
+    arrays, splits and seeds (0-2), accuracy in %; and in the GeoNIRS
+    benchmark :footcite:`li2026geonirs` (Table 14, macro-F1 in %, 12 s
+    windows, subject-level 5-fold CV, seeds 810 and 811, ``"multiscale"``),
+    against GeoNIRS's copy of fNIRS4D in the same loop:
+
+    ===================  ===========  =========  =============
+    Cell                 Paper value  This port  Authors' code
+    ===================  ===========  =========  =============
+    UFFT KFold           --           71.98      72.00
+    UFFT LOSO            --           65.81      65.85
+    WG KFold             --           61.54      61.33
+    WG LOSO              --           61.92      62.00
+    GeoNIRS DS42         68.98        67.89      69.03
+    GeoNIRS DS19         50.79        49.86      50.60
+    ===================  ===========  =========  =============
+
+    `License <https://github.com/wzhlearning/fNIRS4D/blob/main/LICENSE>`_
 
     References
     ----------
