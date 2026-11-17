@@ -239,8 +239,8 @@ def test_geonirs_ch_mask_pairs_match_each_recording_alone():
     # GeoNIRS reads HbO/HbR pairs: recordings of 1, 3 and 2 interleaved pairs
     torch.manual_seed(0)
     model = GeoNIRS(n_chans=6, n_outputs=3, n_times=40, channel_order="interleaved",
-                    embedding_dim=32, num_heads=4, temporal_layers=1,
-                    num_latent_sources=4, output_feature_dim=8).eval()
+                    embed_dim=32, num_heads=4, depth=1,
+                    n_latent_channels=4, feature_dim=8).eval()
     xs = [torch.randn(2 * n_real, 40) for n_real in N_REAL]
     geoms = [_positions(i, n_real).repeat(1, 2) for i, n_real in enumerate(N_REAL)]
     mask = torch.arange(6) < 2 * torch.tensor(N_REAL)[:, None]
@@ -273,8 +273,8 @@ def test_fnirs_chs_info_ch_mask_matches_each_recording_alone(name):
     torch.manual_seed(0)
     if name == "GeoNIRS":
         model = GeoNIRS(chs_info=_mne_fnirs_chs(3), n_outputs=3, n_times=40,
-                        embedding_dim=32, num_heads=4, temporal_layers=1,
-                        num_latent_sources=4, output_feature_dim=8)
+                        embed_dim=32, num_heads=4, depth=1,
+                        n_latent_channels=4, feature_dim=8)
         assert model.channel_order == "interleaved"
         alone = [{"geometry": model.default_geometry[:n_real]} for n_real in N_REAL]
     else:

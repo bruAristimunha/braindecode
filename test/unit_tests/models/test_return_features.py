@@ -225,9 +225,9 @@ _MODELS = [
         GeoNIRS,
         4,
         {
-            "temporal_layers": 1,
+            "depth": 1,
             "num_heads": 4,
-            "embedding_dim": 64,
+            "embed_dim": 64,
             "chs_info": _fnirs_chs_info(2),
         },
         False,
