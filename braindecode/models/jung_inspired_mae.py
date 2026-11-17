@@ -43,48 +43,167 @@ class JungInspiredMAE(EEGModuleMixin, nn.Module):
     paper-guided implementation rather than an exact reproduction of the
     original method". This class ports that implementation (their
     ``jung_inspired_vanilla_mae``) and loads the weights they trained,
-    ``jung_mae.pt``; it is not code by Jung et al.
+    ``jung_mae.pt``; it is not code by Jung et al. In the GeoNIRS tables it
+    is "Jung-MAE", with 2.03M parameters at 52 channels and 50 time points,
+    head included (their Table 10).
 
-    Each HbO/HbR pair is encoded on its own: its samples are cut into patches
-    of ``patch_samples`` HbO and HbR samples, each patch is projected to a
-    token, sinusoidal patch positions are added, and a pre-norm Transformer
-    encodes the tokens of the pair. A linear head reads all the tokens, as the
-    benchmark's ``flatten_linear`` head (whose training-set standardization of
-    the features is left to the caller). NaN marks a missing sample: patches
-    with too few finite samples are left out of attention and zeroed.
+    The reference (``JungInspiredMAE`` and ``MAEConfig`` in GeoNIRS
+    ``model/jung_inspired_mae.py``):
 
-    :meth:`load_state_dict` takes the GeoNIRS ``jung_mae.pt`` (decoder
-    dropped). The file holds no data configuration; the GeoNIRS benchmark
-    feeds it the same rows as :class:`GeoNIRS`: 5 Hz HbO/HbR in 150-sample
-    (30 s) windows, each recording's HbO and HbR z-scored separately.
+    - Patches: each HbO/HbR pair is cut into patches of ``patch_samples``
+      time points. The HbO and HbR samples of a patch are interleaved into
+      one ``2 * patch_samples`` vector (``[HbO_t, HbR_t, ...]``), projected
+      to ``encoder_dim`` (``patch_embed``), and the sinusoidal position of
+      the patch is added.
+    - Encoder: ``encoder_layers`` pre-norm Transformer layers
+      (``encoder_heads`` heads, feed-forward width
+      ``mlp_ratio * encoder_dim``, GELU, dropout ``drop_prob``) and a final
+      LayerNorm (``encoder``). Every pair is encoded on its own with the same
+      weights.
+    - Validity: a patch is valid when at least
+      ``minimum_patch_valid_fraction`` of its samples are valid in both
+      chromophores. Invalid patches are left out of the attention and their
+      tokens are zero.
+    - Pretraining (not ported): half of the valid patches of each pair are
+      hidden (``mask_ratio=0.5`` in ``jung_mae.pt``), the encoder sees the
+      others, and a Transformer decoder (2 layers, 4 heads, width 96) with a
+      mask token predicts the hidden patches; the loss is the mean squared
+      error over their valid samples.
+    - Head: the benchmark's ``flatten_linear`` head (``MAEEventClassifier``):
+      the tokens of all pairs and patches are flattened, standardized with
+      training-set statistics, then a Dropout(0.1) and one Linear. Here
+      ``head_dropout`` and ``final_layer``; the standardization is left to
+      the caller.
+
+    How braindecode maps it:
+
+    - ``x`` is ``(batch, n_chans, n_times)`` with ``n_chans = 2 * n_pairs``:
+      the HbO rows then the HbR rows, or MNE's interleaved order, read from
+      ``chs_info`` (``channel_order``).
+    - The reference takes a dictionary of ``hbo`` and ``hbr`` tensors with
+      ``valid_time_mask`` and ``valid_channel_mask``. Here the data carry the
+      validity: NaN marks a missing sample (an all-NaN row marks a missing
+      channel), and the opt-in ``mask`` of ``forward``/:meth:`encode` marks
+      more samples missing.
+    - :meth:`encode` returns the reference's ``"foundation"``
+      ``(batch, n_pairs, n_patches, encoder_dim)`` and ``"valid"``
+      ``(batch, n_pairs, n_patches)``; ``forward`` adds the head.
+    - With ``jung_mae.pt``, the features equal the reference encoder's in
+      eval mode (max-abs 0.0, with and without missing samples). In training
+      mode the reference packs the visible tokens of each pair before the
+      encoder and the port uses a key padding mask, so dropout draws differ.
+    - ``n_times`` must be a multiple of ``patch_samples``, as in the
+      reference; ``on_non_divisible="pad"`` or ``"crop"`` are additions of the
+      port, and so is ``mask``. ``ch_mask`` is refused, because
+      ``final_layer`` spans every channel.
+    - ``final_layer`` is drawn like the other linear layers of the reference
+      (Xavier uniform, zero bias); the benchmark's classifier keeps PyTorch's
+      default ``nn.Linear`` initialization.
+
+    .. important::
+       **Pre-trained weights**
+
+       The GeoNIRS repository releases ``checkpoint/jung_mae.pt``
+       (github.com/GeoNIRS/GeoNIRS at ``81f8995``, Git LFS, sha256
+       ``6bb13e859401e910000dd2ff3b2519b95f1c84197728714306c6eb04382c9a22``),
+       trained by the GeoNIRS authors. It is not on the Hugging Face Hub.
+       :meth:`load_state_dict` takes the payload as released and drops the
+       decoder:
+
+       .. code-block:: python
+
+           import torch
+
+           from braindecode.models import JungInspiredMAE
+
+           payload = torch.load("jung_mae.pt", map_location="cpu", weights_only=True)
+           model = JungInspiredMAE(n_chans=40, n_outputs=2, n_times=60, sfreq=5.0)
+           model.load_state_dict(payload)  # encoder loaded, new head kept
+
+       The payload holds the model configuration (the defaults of this
+       class) and no data configuration. The GeoNIRS paper processes every
+       dataset in the same way (its Appendix B.1): optical density,
+       quality control, the modified Beer-Lambert law (partial pathlength
+       factor 6.0, µmol/L), resampling of HbO and HbR to 5 Hz, and a
+       z-score of HbO and of HbR per recording over all valid channels and
+       samples. It builds its pretraining samples from 30 s windows (150
+       samples, 15 patches of 2 s); its downstream windows keep each task's
+       length, 10 s or 12 s. All methods of the benchmark receive the same
+       input windows; invalid samples are zero-filled and marked by validity
+       masks there, and are NaN here.
 
     Parameters
     ----------
     patch_samples : int, default=10
-        Samples per patch and chromophore (2 s at 5 Hz).
+        Reference ``patch_samples``: samples per patch and chromophore
+        (2 s at 5 Hz).
     on_non_divisible : {"error", "pad", "crop"}, default="error"
         A ``n_times`` that is not a multiple of ``patch_samples`` is refused,
         as by the reference, zero-padded or cropped.
     encoder_dim : int, default=192
-        Token width.
+        Reference ``encoder_dim``: token width.
     encoder_layers : int, default=4
-        Transformer layers.
+        Reference ``encoder_layers``: Transformer layers.
     encoder_heads : int, default=8
-        Attention heads per layer.
+        Reference ``encoder_heads``: attention heads per layer.
     mlp_ratio : float, default=4.0
-        Feed-forward width relative to ``encoder_dim``.
+        Reference ``mlp_ratio``: feed-forward width relative to
+        ``encoder_dim``.
     channel_order : {"stacked", "interleaved"} or None, default=None
-        ``[HbO_1..HbO_C, HbR_1..HbR_C]`` or MNE's ``[HbO_1, HbR_1, ...]``;
-        ``None`` reads it from ``chs_info``, and is ``"stacked"`` without it.
+        ``[HbO_1..HbO_P, HbR_1..HbR_P]`` (:math:`P` pairs) or MNE's
+        ``[HbO_1, HbR_1, ...]``; ``None`` reads it from ``chs_info``, and is
+        ``"stacked"`` without it.
         ``n_chans`` must be even.
     drop_prob : float, default=0.1
-        Dropout in the encoder layers.
+        Reference ``dropout``: dropout in the encoder layers.
     head_drop_prob : float, default=0.1
-        Dropout before ``final_layer``.
+        Benchmark ``head_dropout``: dropout before ``final_layer``.
     minimum_patch_valid_fraction : float, default=0.8
-        Fraction of finite samples a patch needs to be valid.
+        Reference ``minimum_patch_valid_fraction``: fraction of valid samples
+        a patch needs to be valid.
     activation : type[nn.Module], default=nn.GELU
-        Activation of the encoder feed-forward sub-layers.
+        Activation of the encoder feed-forward sub-layers (the reference's
+        ``"gelu"``).
+
+    Notes
+    -----
+    Evaluation protocol of the GeoNIRS paper (Appendix B.5-B.6) and its
+    ``benchmark/downstream`` code: eight held-out binary tasks, subject-level
+    five-fold cross-validation with seeds 810 and 811, 30 epochs, batch 16,
+    AdamW (weight decay 0.05), gradient clipping 1.0, 3 warmup epochs then
+    cosine decay to 1e-6, class-weighted cross-entropy, early stopping
+    (patience 15), checkpoint selection by validation balanced accuracy and
+    one test evaluation. Balanced accuracy is the primary metric, with
+    macro-F1 and AUROC. The adaptation modes (``downstream.yaml``; the paper
+    reports ``lp`` and ``lora``):
+
+    =================  ==========================  =======================
+    Mode               Trainable part              Learning rate
+    =================  ==========================  =======================
+    ``jung_mae_lp``    head                        1e-4
+    ``jung_mae_lora``  head and LoRA (rank 4,      1e-4
+                       alpha 8, every Linear)
+    ``jung_mae_ft``    head and encoder            head 1e-4, encoder 1e-5
+    =================  ==========================  =======================
+
+    Replication of Jung-MAE-LP with the released checkpoint in this port,
+    under the benchmark's linear-probe loop (``train.py``: frozen encoder,
+    standardized flattened features, Dropout(0.1) and a Linear, AdamW 1e-4,
+    the same folds, seeds 810 and 811), on DS42 (action mode, 41 channels)
+    and DS19 (pain intensity, 23 channels); mean of the two seeds, each the
+    mean over the five test folds:
+
+    =====================  ========  =================  ========
+    Task                   Metric    GeoNIRS paper (%)  Port (%)
+    =====================  ========  =================  ========
+    DS42 (action mode)     macro-F1  68.36              68.35
+    DS42 (action mode)     AUROC     76.78              76.80
+    DS19 (pain intensity)  macro-F1  54.23              54.95
+    DS19 (pain intensity)  AUROC     58.39              58.63
+    =====================  ========  =================  ========
+
+    The authors' implementation with the same checkpoint gives the port's
+    features on these windows (max-abs 0.0).
 
     References
     ----------
