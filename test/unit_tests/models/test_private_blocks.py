@@ -102,8 +102,8 @@ _KNOWN_PRIVATE_BLOCKS = {
     ("mirepnet", "_PatchEmbedding"),
     ("mscformer", "_MultiScalePatchEmbeddingCNN"),
     ("msvtnet", "_PositionalEncoding"),
-    ("mtrenirs", "_Block"),
-    ("mtrenirs", "_MultiHeadAttention"),  # rotary positions, key mask
+    ("mtrenirs", "_TransformerBlock"),
+    ("mtrenirs", "_RotaryAttention"),  # rotary positions, key mask
     ("mvpformer", "_WaveletPatchEmbed"),
     ("mvpformer", "_MVPAttention"),
     ("mvpformer", "_SwiGLUMLP"),

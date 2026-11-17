@@ -6746,6 +6746,14 @@ def test_geonirs_refuses_a_bad_pool_or_geometry_count():
         model(torch.randn(1, 4, 60), geometry=torch.zeros(3, 6))
 
 
+def test_mtrenirs_refuses_a_bad_pool_or_coordinate_count():
+    with pytest.raises(ValueError, match="pool must be one of"):
+        MtReNIRS(chs_info=_fnirs_chs_info(2), n_outputs=2, n_times=100, pool="mean")
+    model = MtReNIRS(chs_info=_fnirs_chs_info(2), n_outputs=2, n_times=100, depth=1)
+    with pytest.raises(ValueError, match="coordinates and x have different channel counts"):
+        model(torch.randn(1, 4, 100), coordinates=torch.zeros(3, 4))
+
+
 def test_mtrenirs_chromophores_and_valid_window_pooling():
     """HbO/HbR come from the names, NaN windows do not dilute the pooling,
     and an odd head_dim is refused."""
