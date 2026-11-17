@@ -25,7 +25,7 @@ from braindecode.models.util import fnirs_channel_order, fnirs_split_hbo_hbr
 
 
 class GeoNIRS(EEGModuleMixin, nn.Module):
-    r"""GeoNIRS from Li et al. (2026) :footcite:`li2026geonirs`.
+    r"""GeoNIRS from Li et al. (2026).
 
     :bdg-info:`Attention/Transformer` :bdg-dark-line:`Channel` :bdg-danger:`Foundation Model`
 

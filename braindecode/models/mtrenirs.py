@@ -34,7 +34,7 @@ from braindecode.modules import FeedForwardBlock, TimmAttention
 
 
 class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
-    r"""MtReNIRS from Chae et al. (2026) :footcite:`microsoft2026mtrenirs`.
+    r"""MtReNIRS from Chae et al. (2026).
 
     :bdg-info:`Attention/Transformer` :bdg-dark-line:`Channel` :bdg-danger:`Foundation Model`
 
@@ -50,7 +50,8 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
        embedding, and (D) masked pretraining and downstream transfer". This
        class is the encoder of (C)-(D) with a linear head.
 
-    A montage-aware masked autoencoder for fNIRS. Each token is one 10-s window
+    A montage-aware masked autoencoder for fNIRS
+    :footcite:`microsoft2026mtrenirs`. Each token is one 10-s window
     :math:`x_{c,t} \in \mathbb{R}^{100}` of a chromophore channel
     :math:`c = (i, b_c)`; "Each 10-s signal segment was projected by a linear
     layer to a 128-dimensional signal embedding", to which an MLP of six
