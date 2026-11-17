@@ -55,9 +55,10 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
     - **Left out:** the pretraining decoders, the head's training-set feature
       standardization (left to the caller) and LoRA. **Added:**
       ``pool="mean_std"``, ``on_non_divisible="pad"``/``"crop"`` and ``ch_mask``.
-    - **Names.** Arguments carry the authors' ``model_config`` keys
-      (``dropout`` is ``drop_prob``). The state-dict keys are the checkpoints'
-      own, so they load with ``strict=True`` and no ``mapping``.
+    - **Names.** Arguments take braindecode's names; each parameter below
+      gives the authors' ``model_config`` key it replaces. The state-dict keys
+      are the checkpoints' own, so they load with ``strict=True`` and no
+      ``mapping``.
 
     .. rubric:: Variants
 
@@ -68,9 +69,9 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
     Component                              GeoNIRS-Base           GeoNIRS-Large
     =====================================  =====================  ======================
     Pretraining corpus                     8 datasets, 383.30 h   22 datasets, 827.04 h
-    ``embedding_dim`` (:math:`D`)          192                    384
-    ``temporal_layers`` / ``num_heads``    4 / 8                  6 / 12
-    ``output_feature_dim`` (:math:`F`)     64                     128
+    ``embed_dim`` (:math:`D`)              192                    384
+    ``depth`` / ``num_heads``              4 / 8                  6 / 12
+    ``feature_dim`` (:math:`F`)            64                     128
     Parameters, checkpoint with decoders   6,511,214              30,146,414
     Parameters, this class (no head)       4,443,462              24,394,310
     Released checkpoint                    ``geonirs_base.pt``    ``geonirs_large.pt``
@@ -78,37 +79,44 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
 
     Parameters
     ----------
-    patch_samples : int, default=10
-        :math:`S`, samples per patch: 2 s at 5 Hz, as in both checkpoints.
+    patch_size : int, default=10
+        :math:`S`, samples per patch: 2 s at 5 Hz, as in both checkpoints
+        (the reference's ``patch_samples``).
     max_patches : int, default=15
         Rows of the temporal positional embedding (30 s pretraining windows),
         raised to the patch count of ``n_times``; 15 loads the checkpoints.
     on_non_divisible : {"error", "pad", "crop"}, default="error"
-        For ``n_times`` not a multiple of ``patch_samples``: refuse, as the
+        For ``n_times`` not a multiple of ``patch_size``: refuse, as the
         reference does, zero-pad or crop.
-    embedding_dim : int, default=192
-        :math:`D`, token width.
+    embed_dim : int, default=192
+        :math:`D`, token width (the reference's ``embedding_dim``).
     num_heads : int, default=8
         Heads of the temporal Transformers.
-    temporal_layers : int, default=4
-        Layers of each temporal Transformer.
+    depth : int, default=4
+        Layers of each temporal Transformer (the reference's
+        ``temporal_layers``).
     mlp_ratio : float, default=4.0
         Feed-forward width of the temporal Transformers, relative to :math:`D`.
     geometry_hidden_dim : int or None, default=None
-        Hidden width of the geometry MLP; ``None`` is ``embedding_dim``.
+        Hidden width of the geometry MLP; ``None`` is ``embed_dim``.
     geometry_heads : int or None, default=None
         Heads of the geometry Transformer layer; ``None`` is ``num_heads``.
-    num_latent_sources : int, default=16
-        :math:`M`, learnable latent queries.
-    spatial_heads : int or None, default=None
-        Heads of the channel-compression attention; ``None`` is ``num_heads``.
-    output_feature_dim : int, default=64
-        :math:`F`, width of each latent token after the chromophore projection.
+    n_latent_channels : int, default=16
+        :math:`M`, learnable latent queries, the channels of the compressed
+        montage (the reference's ``num_latent_sources``).
+    compressor_heads : int or None, default=None
+        Heads of the channel compressor's attention; ``None`` is
+        ``num_heads`` (the reference's ``spatial_heads``).
+    feature_dim : int, default=64
+        :math:`F`, width of each latent token after the chromophore projection
+        (the reference's ``output_feature_dim``).
     use_channel_geometry : bool, default=True
         Add the geometry embedding to the keys; ``False`` drops that encoder.
     pool : {"flatten", "mean_std"}, default="flatten"
-        Readout: all features (the paper's ``flatten_linear`` head), or their
-        mean and standard deviation over valid patches (``mean_std_linear``).
+        Readout of the ``(batch, 2, M, P, F)`` tokens: ``"flatten"``, all
+        tokens flattened (the paper's ``flatten_linear`` head); ``"mean_std"``,
+        their mean and standard deviation over the valid patches
+        (``mean_std_linear``).
     channel_order : {"stacked", "interleaved"} or None, default=None
         ``[HbO_1..HbO_C, HbR_1..HbR_C]`` or ``[HbO_1, HbR_1, ...]``; ``None``
         reads it from ``chs_info`` (stacked without it).
@@ -185,18 +193,18 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
         input_window_seconds: float | None = None,
         sfreq: float | None = None,
         *,
-        patch_samples: int = 10,
+        patch_size: int = 10,
         max_patches: int = 15,
         on_non_divisible: Literal["error", "pad", "crop"] = "error",
-        embedding_dim: int = 192,
+        embed_dim: int = 192,
         num_heads: int = 8,
-        temporal_layers: int = 4,
+        depth: int = 4,
         mlp_ratio: float = 4.0,
         geometry_hidden_dim: int | None = None,
         geometry_heads: int | None = None,
-        num_latent_sources: int = 16,
-        spatial_heads: int | None = None,
-        output_feature_dim: int = 64,
+        n_latent_channels: int = 16,
+        compressor_heads: int | None = None,
+        feature_dim: int = 64,
         use_channel_geometry: bool = True,
         pool: Literal["flatten", "mean_std"] = "flatten",
         channel_order: Literal["stacked", "interleaved"] | None = None,
@@ -221,22 +229,22 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
         self.channel_order = fnirs_channel_order(self._chs_info, channel_order)
         _check_on_non_divisible(on_non_divisible)
         self.on_non_divisible = on_non_divisible
-        self.patch_samples = patch_samples
-        self.n_patches = patch_count(self.n_times, patch_samples, on_non_divisible)
+        self.patch_size = patch_size
+        self.n_patches = patch_count(self.n_times, patch_size, on_non_divisible)
         self.min_valid_samples = math.ceil(
-            patch_samples * float(minimum_patch_valid_fraction)
+            patch_size * float(minimum_patch_valid_fraction)
         )
-        self.num_latent_sources = num_latent_sources
+        self.n_latent_channels = n_latent_channels
         self.pool = pool
 
         temporal_encoder = dict(
-            patch_samples=patch_samples,
+            patch_size=patch_size,
             max_patches=max(max_patches, self.n_patches),
-            dim=embedding_dim,
+            embed_dim=embed_dim,
             num_heads=num_heads,
-            num_layers=temporal_layers,
+            depth=depth,
             mlp_ratio=mlp_ratio,
-            dropout=drop_prob,
+            drop_prob=drop_prob,
             activation=activation,
         )
         self.hbo_encoder = _TemporalEncoder(**temporal_encoder)
@@ -244,24 +252,24 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
         self.geometry_encoder = None
         if use_channel_geometry:
             self.geometry_encoder = _GeometryEncoder(
-                dim=embedding_dim,
-                hidden_dim=geometry_hidden_dim or embedding_dim,
+                embed_dim=embed_dim,
+                hidden_dim=geometry_hidden_dim or embed_dim,
                 num_heads=geometry_heads or num_heads,
-                dropout=drop_prob,
+                drop_prob=drop_prob,
                 activation=activation,
             )
-        self.channel_compressor = _LatentSourceCrossAttention(
-            dim=embedding_dim,
-            num_latents=num_latent_sources,
-            num_heads=spatial_heads or num_heads,
-            dropout=drop_prob,
+        self.channel_compressor = _ChannelCompressorAttention(
+            embed_dim=embed_dim,
+            n_latent_channels=n_latent_channels,
+            num_heads=compressor_heads or num_heads,
+            drop_prob=drop_prob,
             activation=activation,
         )
-        self.hbo_projection = _residual_projection(
-            embedding_dim, output_feature_dim, drop_prob, activation
+        self.hbo_projection = _chromophore_projection(
+            embed_dim, feature_dim, drop_prob, activation
         )
-        self.hbr_projection = _residual_projection(
-            embedding_dim, output_feature_dim, drop_prob, activation
+        self.hbr_projection = _chromophore_projection(
+            embed_dim, feature_dim, drop_prob, activation
         )
         self.register_buffer(
             "default_geometry",
@@ -270,30 +278,30 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
         )
         self.split_patches = Rearrange(
             "batch pairs (patches samples) -> batch pairs patches samples",
-            samples=patch_samples,
+            samples=patch_size,
         )
         self.pair_over_time = Rearrange("batch pairs -> batch pairs 1")
-        self.patch_over_sources = Rearrange("batch patches -> batch 1 patches")
+        self.patch_over_latents = Rearrange("batch patches -> batch 1 patches")
         self.patch_over_features = Rearrange("batch patches -> batch 1 patches 1")
         self.flatten_foundation = Rearrange(
-            "batch chrom sources patches dim -> batch (chrom sources patches dim)"
+            "batch chrom latents patches dim -> batch (chrom latents patches dim)"
         )
         self.join_chromophores = Rearrange(
-            "batch chrom sources patches dim -> batch sources patches (chrom dim)"
+            "batch chrom latents patches dim -> batch latents patches (chrom dim)"
         )
         self.valid_over_features = Rearrange(
-            "batch sources patches -> batch sources patches 1"
+            "batch latents patches -> batch latents patches 1"
         )
-        self.mean_over_patches = Rearrange("batch sources dim -> batch sources 1 dim")
+        self.mean_over_patches = Rearrange("batch latents dim -> batch latents 1 dim")
         self.flatten_statistics = Rearrange(
-            "stat batch sources dim -> batch (sources stat dim)"
+            "stat batch latents dim -> batch (latents stat dim)"
         )
-        self.feature_dim = {
-            "flatten": 2 * num_latent_sources * self.n_patches * output_feature_dim,
-            "mean_std": 4 * num_latent_sources * output_feature_dim,
+        n_features = {
+            "flatten": 2 * n_latent_channels * self.n_patches * feature_dim,
+            "mean_std": 4 * n_latent_channels * feature_dim,
         }[pool]
         self.head_dropout = nn.Dropout(head_drop_prob)
-        self.final_layer = nn.Linear(self.feature_dim, self.n_outputs)
+        self.final_layer = nn.Linear(n_features, self.n_outputs)
 
     def encode(
         self,
@@ -302,13 +310,13 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
         ch_mask: Optional[torch.Tensor] = None,
     ) -> dict[str, torch.Tensor]:
         """``(batch, n_chans, n_times)`` -> ``"foundation"``
-        ``(batch, 2, M, P, output_feature_dim)`` (:math:`Z^O, Z^R`) and its
+        ``(batch, 2, M, P, feature_dim)`` (:math:`Z^O, Z^R`) and its
         validity ``"valid"`` ``(batch, M, P)``. ``geometry`` is
         ``(n_pairs, 6)`` or ``(batch, n_pairs, 6)``; ``ch_mask``
         ``(batch, n_pairs)`` flags real pairs.
         """
         # (batch, n_chans, n_times) -> (batch, n_chans, P * S)
-        x = pad_or_crop_to_patches(x, self.patch_samples, self.on_non_divisible)
+        x = pad_or_crop_to_patches(x, self.patch_size, self.on_non_divisible)
         # (batch, n_chans, P * S) -> 2 x (batch, n_pairs, P * S)
         hbo, hbr = fnirs_split_hbo_hbr(x, self.channel_order)
         batch_size, n_pairs, _ = hbo.shape
@@ -367,29 +375,30 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
         temporal_hbo = self.hbo_encoder(hbo, patch_valid)
         temporal_hbr = self.hbr_encoder(hbr, patch_valid)
         # -> 2 x (batch, M, P, D)
-        source_hbo, source_hbr = self.channel_compressor(
+        latent_hbo, latent_hbr = self.channel_compressor(
             temporal_hbo, temporal_hbr, geometry_embedding, patch_valid
         )
         # (batch, n_pairs, P) -> (batch, P): a patch with a valid pair
         time_valid = patch_valid.any(dim=1)
         # (batch, P) -> (batch, 1, P, 1)
         valid_scale = self.patch_over_features(time_valid)
-        valid_scale = valid_scale.to(source_hbo.dtype)
+        valid_scale = valid_scale.to(latent_hbo.dtype)
         # (batch, M, P, D) -> (batch, M, P, F): Z^O, Z^R
-        compact_hbo = self.hbo_projection(source_hbo)
+        compact_hbo = self.hbo_projection(latent_hbo)
         compact_hbo = compact_hbo * valid_scale
-        compact_hbr = self.hbr_projection(source_hbr)
+        compact_hbr = self.hbr_projection(latent_hbr)
         compact_hbr = compact_hbr * valid_scale
         # 2 x (batch, M, P, F) -> (batch, 2, M, P, F)
         foundation = torch.stack([compact_hbo, compact_hbr], dim=1)
         # (batch, P) -> (batch, 1, P) -> (batch, M, P)
-        valid = self.patch_over_sources(time_valid)
-        valid = valid.expand(-1, self.num_latent_sources, -1)
+        valid = self.patch_over_latents(time_valid)
+        valid = valid.expand(-1, self.n_latent_channels, -1)
         return {"foundation": foundation, "valid": valid}
 
     def reset_head(self, n_outputs: int) -> None:
         self._set_n_outputs(n_outputs)
-        self.final_layer = nn.Linear(self.feature_dim, self.n_outputs)
+        n_features = self.final_layer.in_features
+        self.final_layer = nn.Linear(n_features, self.n_outputs)
 
     def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
         """Also takes an official checkpoint (``{"model": ...}``); its
@@ -472,27 +481,28 @@ class _TemporalEncoder(nn.Module):
 
     def __init__(
         self,
-        patch_samples,
+        patch_size,
         max_patches,
-        dim,
+        embed_dim,
         num_heads,
-        num_layers,
+        depth,
         mlp_ratio,
-        dropout,
+        drop_prob,
         activation,
     ):
         super().__init__()
         self.split_patches = Rearrange(
             "batch pairs (patches samples) -> batch pairs patches samples",
-            samples=patch_samples,
+            samples=patch_size,
         )
-        self.patch_projection = nn.Linear(patch_samples, dim)
-        self.patch_norm = nn.LayerNorm(dim)
-        self.time_embedding = nn.Embedding(max_patches, dim)
+        self.patch_projection = nn.Linear(patch_size, embed_dim)
+        self.patch_norm = nn.LayerNorm(embed_dim)
+        self.time_embedding = nn.Embedding(max_patches, embed_dim)
+        mlp_dim = round(embed_dim * mlp_ratio)
         self.temporal_transformer = _transformer(
-            dim, num_heads, round(dim * mlp_ratio), dropout, activation, num_layers
+            embed_dim, num_heads, mlp_dim, drop_prob, activation, depth
         )
-        self.output_norm = nn.LayerNorm(dim)
+        self.output_norm = nn.LayerNorm(embed_dim)
         self.patch_over_features = Rearrange(
             "batch pairs patches -> batch pairs patches 1"
         )
@@ -539,16 +549,16 @@ class _GeometryEncoder(nn.Module):
     source-detector geometry of the channels (the authors'
     ``SourceDetectorGeometryEncoder``)."""
 
-    def __init__(self, dim, hidden_dim, num_heads, dropout, activation):
+    def __init__(self, embed_dim, hidden_dim, num_heads, drop_prob, activation):
         super().__init__()
         self.geometry_projection = nn.Sequential(
             nn.Linear(6, hidden_dim),
             activation(),
-            nn.Linear(hidden_dim, dim),
-            nn.LayerNorm(dim),
+            nn.Linear(hidden_dim, embed_dim),
+            nn.LayerNorm(embed_dim),
         )
         self.spatial_transformer = _transformer(
-            dim, num_heads, dim * 2, dropout, activation, 1
+            embed_dim, num_heads, embed_dim * 2, drop_prob, activation, 1
         )
         self.pair_over_features = Rearrange("batch pairs -> batch pairs 1")
 
@@ -570,32 +580,34 @@ class _GeometryEncoder(nn.Module):
         return encoded * weight
 
 
-class _LatentSourceCrossAttention(nn.Module):
+class _ChannelCompressorAttention(nn.Module):
     """The geometry-aware channel compressor (the authors'
-    ``BrainOmniChannelCompressor``): cross-attention of ``num_latents``
-    learned queries over the channels, then an output projection and a
-    feed-forward block.
+    ``BrainOmniChannelCompressor``): cross-attention of
+    ``n_latent_channels`` learned queries over the channels, then an output
+    projection and a feed-forward block.
 
     Private because one softmax over the fused HbO/HbR keys weighs both
     chromophores' values (one dropout mask), and the released checkpoints
     name its projections ``q_proj``/``k_proj``/``v_proj``/``out_proj``.
     """
 
-    def __init__(self, dim, num_latents, num_heads, dropout, activation):
+    def __init__(self, embed_dim, n_latent_channels, num_heads, drop_prob, activation):
         super().__init__()
-        self.head_dim = dim // num_heads
-        self.latent_queries = nn.Parameter(torch.empty(num_latents, dim))
-        self.q_norm, self.k_norm, self.v_norm = (nn.LayerNorm(dim) for _ in range(3))
-        projections = (nn.Linear(dim, dim) for _ in range(4))
+        self.head_dim = embed_dim // num_heads
+        latent_queries = torch.empty(n_latent_channels, embed_dim)
+        self.latent_queries = nn.Parameter(latent_queries)
+        norms = (nn.LayerNorm(embed_dim) for _ in range(3))
+        self.q_norm, self.k_norm, self.v_norm = norms
+        projections = (nn.Linear(embed_dim, embed_dim) for _ in range(4))
         self.q_proj, self.k_proj, self.v_proj, self.out_proj = projections
-        self.attn_dropout = nn.Dropout(dropout)
-        self.out_norm = nn.LayerNorm(dim)
+        self.attn_dropout = nn.Dropout(drop_prob)
+        self.out_norm = nn.LayerNorm(embed_dim)
         self.ffn = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, dim * 2),
+            nn.LayerNorm(embed_dim),
+            nn.Linear(embed_dim, embed_dim * 2),
             activation(),
-            nn.Dropout(dropout),
-            nn.Linear(dim * 2, dim),
+            nn.Dropout(drop_prob),
+            nn.Linear(embed_dim * 2, embed_dim),
         )
         self.patches_first = Rearrange(
             "batch pairs patches dim -> (batch patches) pairs dim"
@@ -617,7 +629,7 @@ class _LatentSourceCrossAttention(nn.Module):
             chrom=2,
         )
         self.active_over_features = Rearrange("batch one -> batch one 1")
-        self.sources_first = Rearrange(
+        self.latents_first = Rearrange(
             "batch patches latents dim -> batch latents patches dim"
         )
         self.reset_parameters()
@@ -689,13 +701,13 @@ class _LatentSourceCrossAttention(nn.Module):
         # (batch * P, 1) -> (batch * P, 1, 1)
         active_weight = self.active_over_features(active)
         active_weight = active_weight.to(compressed.dtype)
-        source_hbo = self._output_block(
+        latent_hbo = self._output_block(
             compressed[0], latents, active_weight, batch_size, n_patches
         )
-        source_hbr = self._output_block(
+        latent_hbr = self._output_block(
             compressed[1], latents, active_weight, batch_size, n_patches
         )
-        return source_hbo, source_hbr
+        return latent_hbo, latent_hbr
 
     def _output_block(
         self,
@@ -716,7 +728,7 @@ class _LatentSourceCrossAttention(nn.Module):
         # (batch * P, M, D) -> (batch, P, M, D)
         hidden = hidden.unflatten(0, [batch_size, n_patches])
         # (batch, P, M, D) -> (batch, M, P, D)
-        hidden = self.sources_first(hidden)
+        hidden = self.latents_first(hidden)
         return hidden.contiguous()
 
 
@@ -728,14 +740,14 @@ class _ResidualProjectionBlock(nn.Module):
     width-changing skip projection.
     """
 
-    def __init__(self, input_dim, output_dim, dropout, activation):
+    def __init__(self, input_dim, output_dim, drop_prob, activation):
         super().__init__()
         self.skip = nn.Linear(input_dim, output_dim)
         self.main = nn.Sequential(
             nn.LayerNorm(input_dim),
             nn.Linear(input_dim, output_dim),
             activation(),
-            nn.Dropout(dropout),
+            nn.Dropout(drop_prob),
             nn.Linear(output_dim, output_dim),
         )
         self.residual_scale = nn.Parameter(torch.empty(()))
@@ -751,26 +763,32 @@ class _ResidualProjectionBlock(nn.Module):
         return skip + update
 
 
-def _transformer(dim, heads, ff_dim, dropout, activation, n_layers):
+def _transformer(embed_dim, num_heads, mlp_dim, drop_prob, activation, depth):
     """Pre-norm ``nn.TransformerEncoder`` with a final LayerNorm."""
     layer = nn.TransformerEncoderLayer(
-        dim, heads, ff_dim, dropout, activation(), batch_first=True, norm_first=True
+        embed_dim,
+        num_heads,
+        mlp_dim,
+        drop_prob,
+        activation(),
+        batch_first=True,
+        norm_first=True,
     )
     return nn.TransformerEncoder(
-        layer, n_layers, norm=nn.LayerNorm(dim), enable_nested_tensor=False
+        layer, depth, norm=nn.LayerNorm(embed_dim), enable_nested_tensor=False
     )
 
 
-def _residual_projection(input_dim, output_dim, dropout, activation):
+def _chromophore_projection(embed_dim, feature_dim, drop_prob, activation):
     """Chromophore-specific residual projection from :math:`D` to :math:`F`:
     three residual stages, ``[192, 128, 96, 64]`` for GeoNIRS-Base and
     ``[D, D / 2, D / 4, F]`` otherwise (``[384, 192, 96, 128]`` for Large),
     as the paper's Table 6."""
-    widths = [input_dim, input_dim // 2, input_dim // 4, output_dim]
-    if input_dim == 192 and output_dim == 64:
+    widths = [embed_dim, embed_dim // 2, embed_dim // 4, feature_dim]
+    if embed_dim == 192 and feature_dim == 64:
         widths = [192, 128, 96, 64]
     stages = [
-        _ResidualProjectionBlock(widths[i], widths[i + 1], dropout, activation)
+        _ResidualProjectionBlock(widths[i], widths[i + 1], drop_prob, activation)
         for i in range(3)
     ]
     # ``blocks`` is the checkpoints' key path

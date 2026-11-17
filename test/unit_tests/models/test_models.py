@@ -6610,9 +6610,9 @@ def test_fnirs_foundation_models_non_divisible_windows_follow_the_reference():
 @pytest.mark.parametrize(
     "model_cls,kwargs,n_times",
     [
-        (GeoNIRS, {"temporal_layers": 1, "num_heads": 4, "embedding_dim": 64,
+        (GeoNIRS, {"depth": 1, "num_heads": 4, "embed_dim": 64,
                    "pool": "mean_std"}, 60),
-        (MtReNIRS, {"depth": 2, "n_heads": 2, "d_model": 32,
+        (MtReNIRS, {"depth": 2, "num_heads": 2, "embed_dim": 32,
                     "pool": "channel_temporal_mean"}, 100),
     ],
 )
@@ -6714,9 +6714,9 @@ def test_geonirs_mean_std_is_the_reference_readout():
     """``pool="mean_std"``: the valid-patch mean and the reference's
     ``variance.clamp_min(0).sqrt()``, so zero with a single valid patch."""
     model = GeoNIRS(chs_info=_fnirs_chs_info(2), n_outputs=2, n_times=60,
-                    pool="mean_std", embedding_dim=32, num_heads=4,
-                    temporal_layers=1, num_latent_sources=2,
-                    output_feature_dim=4).eval()
+                    pool="mean_std", embed_dim=32, num_heads=4,
+                    depth=1, n_latent_channels=2,
+                    feature_dim=4).eval()
     x = torch.randn(1, 4, 60)
     x[..., 10:] = float("nan")
     with torch.no_grad():
@@ -6764,7 +6764,7 @@ def test_mtrenirs_chromophores_and_valid_window_pooling():
         tokens, _ = model.encode_windows(x)
     torch.testing.assert_close(features, tokens[:, 0].reshape(1, -1), atol=1e-6, rtol=1e-6)
     with pytest.raises(ValueError, match="even head_dim"):
-        MtReNIRS(n_chans=4, n_outputs=2, n_times=100, d_model=12, n_heads=4)
+        MtReNIRS(n_chans=4, n_outputs=2, n_times=100, embed_dim=12, num_heads=4)
 
 
 _FNIRS_WEIGHTS = os.environ.get("BRAINDECODE_FNIRS_WEIGHTS", "")
@@ -6801,8 +6801,8 @@ def _fnirs_checkpoint(file):
          [[0.02500118874013424, 0.04738733917474747, 0.007597371935844421, 0.005497157108038664],
           [-0.12108907848596573, 0.2241547405719757, -0.18274709582328796, -0.03251400962471962]]),
         ("geonirs_large.pt", GeoNIRS, {"n_times": 150, "sfreq": 5.0,
-                                       "embedding_dim": 384, "num_heads": 12,
-                                       "temporal_layers": 6, "output_feature_dim": 128},
+                                       "embed_dim": 384, "num_heads": 12,
+                                       "depth": 6, "feature_dim": 128},
          [[-3.8912150859832764, -0.606697678565979, -0.19837510585784912, -6.412940979003906],
           [-5.242615699768066, -2.4871740341186523, -0.46112173795700073, -3.506788730621338]]),
         pytest.param(

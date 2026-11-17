@@ -75,7 +75,7 @@ _KNOWN_PRIVATE_BLOCKS = {
     ("emg2qwerty", "_RotationInvariantMLP"),
     ("emg2qwerty", "_MultiBandRotationInvariantMLP"),
     ("epint", "_RoPEAttention"),
-    ("geonirs", "_LatentSourceCrossAttention"),  # one softmax, two values
+    ("geonirs", "_ChannelCompressorAttention"),  # one softmax, two values
     ("geonirs", "_ResidualProjectionBlock"),  # learned residual scale
     ("guetschel2026", "_LinearPatchEmbedding"),
     ("guetschel2026", "_MultiHeadAttention"),
@@ -103,7 +103,7 @@ _KNOWN_PRIVATE_BLOCKS = {
     ("mscformer", "_MultiScalePatchEmbeddingCNN"),
     ("msvtnet", "_PositionalEncoding"),
     ("mtrenirs", "_TransformerBlock"),
-    ("mtrenirs", "_RotaryAttention"),  # rotary positions, key mask
+    ("mtrenirs", "_RotarySelfAttention"),  # rotary positions, key mask
     ("mvpformer", "_WaveletPatchEmbed"),
     ("mvpformer", "_MVPAttention"),
     ("mvpformer", "_SwiGLUMLP"),

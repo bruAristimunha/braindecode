@@ -225,9 +225,9 @@ _MODELS = [
         GeoNIRS,
         4,
         {
-            "temporal_layers": 1,
+            "depth": 1,
             "num_heads": 4,
-            "embedding_dim": 64,
+            "embed_dim": 64,
             "chs_info": _fnirs_chs_info(2),
         },
         False,
@@ -236,7 +236,7 @@ _MODELS = [
     pytest.param(
         MtReNIRS,
         4,
-        {"depth": 1, "n_heads": 2, "d_model": 32, "chs_info": _fnirs_chs_info(2)},
+        {"depth": 1, "num_heads": 2, "embed_dim": 32, "chs_info": _fnirs_chs_info(2)},
         False,
         id="MtReNIRS",
     ),
