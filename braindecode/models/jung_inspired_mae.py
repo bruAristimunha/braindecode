@@ -8,9 +8,10 @@
 from __future__ import annotations
 
 import math
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
+from einops.layers.torch import Rearrange
 from torch import nn
 
 from braindecode.functional import (
@@ -128,8 +129,7 @@ class JungInspiredMAE(EEGModuleMixin, nn.Module):
         _check_on_non_divisible(on_non_divisible)
         self.on_non_divisible = on_non_divisible
         self.patch_samples = patch_samples
-        self.encoder_dim = encoder_dim
-        self.minimum_patch_valid_fraction = minimum_patch_valid_fraction
+        self.min_valid_samples = math.ceil(patch_samples * minimum_patch_valid_fraction)
         n_patches = patch_count(self.n_times, patch_samples, on_non_divisible)
         self.patch_embed = nn.Linear(2 * patch_samples, encoder_dim)
         layer = nn.TransformerEncoderLayer(
@@ -143,6 +143,22 @@ class JungInspiredMAE(EEGModuleMixin, nn.Module):
         )
         self.encoder = nn.TransformerEncoder(
             layer, encoder_layers, nn.LayerNorm(encoder_dim), enable_nested_tensor=False
+        )
+        self.sample_over_chromophores = Rearrange(
+            "batch pairs time -> batch pairs time 1"
+        )
+        self.split_patches = Rearrange(
+            "batch pairs (patches samples) chrom -> (batch pairs) patches (samples chrom)",
+            samples=patch_samples,
+        )
+        self.split_patch_mask = Rearrange(
+            "batch pairs (patches samples) -> batch pairs patches samples",
+            samples=patch_samples,
+        )
+        self.merge_pairs = Rearrange("batch pairs patches -> (batch pairs) patches")
+        self.patch_over_features = Rearrange("rows patches -> rows patches 1")
+        self.flatten_tokens = Rearrange(
+            "batch pairs patches dim -> batch (pairs patches dim)"
         )
         self.head_dropout = nn.Dropout(head_drop_prob)
         self.final_layer = nn.Linear(
@@ -161,7 +177,7 @@ class JungInspiredMAE(EEGModuleMixin, nn.Module):
                 nn.init.zeros_(module.in_proj_bias)
 
     def encode(
-        self, x: torch.Tensor, mask: torch.Tensor | None = None
+        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
     ) -> dict[str, torch.Tensor]:
         """``(batch, n_chans, n_times)`` -> ``"foundation"`` ``(batch,
         n_chans // 2, n_patches, encoder_dim)`` (zero at invalid patches) and
@@ -169,31 +185,48 @@ class JungInspiredMAE(EEGModuleMixin, nn.Module):
         shape as ``x``): True samples count as missing."""
         if mask is not None:
             x = x.masked_fill(mask, float("nan"))
+        # (batch, n_chans, n_times) -> (batch, n_chans, n_patches * patch_samples)
         x = pad_or_crop_to_patches(x, self.patch_samples, self.on_non_divisible)
-        # (batch, n_chans, T) -> 2 x (batch, n_pairs, T)
+        # -> 2 x (batch, n_pairs, n_patches * patch_samples)
         hbo, hbr = fnirs_split_hbo_hbr(x, self.channel_order)
-        batch_size, n_pairs, n_times = hbo.shape
-        q = self.patch_samples
-        n_patches = n_times // q
-        valid = torch.isfinite(hbo) & torch.isfinite(hbr)
-        # (batch, n_pairs, T, 2) -> (batch * n_pairs, n_patches, 2 * q)
-        patches = torch.where(valid.unsqueeze(-1), torch.stack((hbo, hbr), dim=-1), 0.0)
-        patches = patches.reshape(batch_size * n_pairs, n_patches, 2 * q)
-        # (batch, n_pairs, T) -> (batch, n_pairs, n_patches)
-        counts = valid.reshape(batch_size, n_pairs, n_patches, q).sum(dim=-1)
-        patch_valid = counts >= math.ceil(q * self.minimum_patch_valid_fraction)
-        flat_valid = patch_valid.reshape(batch_size * n_pairs, n_patches)
-        # (batch * n_pairs, n_patches, 2 * q) -> (batch * n_pairs, n_patches, encoder_dim)
+        batch_size, n_pairs, _ = hbo.shape
+        hbo_finite = torch.isfinite(hbo)
+        hbr_finite = torch.isfinite(hbr)
+        # (batch, n_pairs, n_patches * patch_samples): both chromophores finite
+        valid = hbo_finite & hbr_finite
+        # -> (batch, n_pairs, n_patches * patch_samples, 2)
+        signal = torch.stack((hbo, hbr), dim=-1)
+        valid_over_chromophores = self.sample_over_chromophores(valid)
+        signal = torch.where(valid_over_chromophores, signal, 0.0)
+        # -> (batch * n_pairs, n_patches, 2 * patch_samples): [HbO_t, HbR_t, ...]
+        patches = self.split_patches(signal)
+        # (batch, n_pairs, n_patches * patch_samples) -> (batch, n_pairs, n_patches, patch_samples)
+        valid_patches = self.split_patch_mask(valid)
+        # -> (batch, n_pairs, n_patches)
+        n_valid_samples = valid_patches.sum(dim=-1)
+        patch_valid = n_valid_samples >= self.min_valid_samples
+        # -> (batch * n_pairs, n_patches)
+        rows_valid = self.merge_pairs(patch_valid)
+        n_patches = patches.shape[1]
+        # (batch * n_pairs, n_patches, 2 * patch_samples) -> (batch * n_pairs, n_patches, encoder_dim)
         tokens = self.patch_embed(patches)
-        tokens = tokens + sinusoidal_positional_encoding(
-            n_patches, self.encoder_dim, device=x.device, dtype=tokens.dtype
+        # (n_patches, encoder_dim)
+        positions = sinusoidal_positional_encoding(
+            n_patches, tokens.shape[-1], device=x.device, dtype=tokens.dtype
         )
+        tokens = tokens + positions
         # A pair without valid patch attends to all (an all-masked softmax
         # is NaN); its output is zeroed.
-        safe = flat_valid | ~flat_valid.any(dim=-1, keepdim=True)
-        encoded = self.encoder(tokens, src_key_padding_mask=~safe)
-        encoded = encoded * flat_valid.unsqueeze(-1).to(encoded.dtype)
-        foundation = encoded.reshape(batch_size, n_pairs, n_patches, self.encoder_dim)
+        row_active = rows_valid.any(dim=-1, keepdim=True)
+        attend = rows_valid | ~row_active
+        padding = ~attend
+        encoded = self.encoder(tokens, src_key_padding_mask=padding)
+        # (batch * n_pairs, n_patches) -> (batch * n_pairs, n_patches, 1)
+        weight = self.patch_over_features(rows_valid)
+        weight = weight.to(encoded.dtype)
+        encoded = encoded * weight
+        # (batch * n_pairs, n_patches, encoder_dim) -> (batch, n_pairs, n_patches, encoder_dim)
+        foundation = encoded.unflatten(0, [batch_size, n_pairs])
         return {"foundation": foundation, "valid": patch_valid}
 
     def reset_head(self, n_outputs: int) -> None:
@@ -206,19 +239,19 @@ class JungInspiredMAE(EEGModuleMixin, nn.Module):
         """Also takes the released payload (weights under ``"model"``): the
         decoder is dropped, and without ``final_layer`` the head is kept."""
         state_dict = state_dict.get("model", state_dict)
-        drop = ("decoder_embed.", "mask_token", "decoder.", "prediction.")
-        sd = {k: v for k, v in state_dict.items() if not k.startswith(drop)}
-        if not any(k.startswith("final_layer.") for k in sd):
-            own = self.state_dict()
-            sd.update({k: v for k, v in own.items() if k.startswith("final_layer.")})
-        return super().load_state_dict(sd, strict=strict, assign=assign)
+        decoder = ("decoder_embed.", "mask_token", "decoder.", "prediction.")
+        cleaned = {k: v for k, v in state_dict.items() if not k.startswith(decoder)}
+        if not any(k.startswith("final_layer.") for k in cleaned):
+            head = self.final_layer.state_dict(prefix="final_layer.")
+            cleaned.update(head)
+        return super().load_state_dict(cleaned, strict=strict, assign=assign)
 
     def forward(
         self,
         x: torch.Tensor,
         return_features: bool = False,
-        ch_mask: torch.Tensor | None = None,
-        mask: torch.Tensor | None = None,
+        ch_mask: Optional[torch.Tensor] = None,
+        mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor | dict[str, torch.Tensor | None]:
         """``x``: ``(batch, n_chans, n_times)``, NaN = missing; ``mask`` as in
         :meth:`encode`. ``ch_mask`` is refused: ``final_layer`` spans every
@@ -227,9 +260,11 @@ class JungInspiredMAE(EEGModuleMixin, nn.Module):
             raise ValueError(
                 "JungInspiredMAE does not accept ch_mask; use NaN channels."
             )
-        # (batch, n_pairs, n_patches, encoder_dim) -> (batch, feature_dim)
+        # (batch, n_chans, n_times) -> (batch, n_pairs, n_patches, encoder_dim)
         foundation = self.encode(x, mask)["foundation"]
-        features = self.head_dropout(foundation.reshape(foundation.shape[0], -1))
+        # -> (batch, n_pairs * n_patches * encoder_dim)
+        features = self.flatten_tokens(foundation)
+        features = self.head_dropout(features)
         if return_features:
             return {"features": features, "cls_token": None}
         return self.final_layer(features)
