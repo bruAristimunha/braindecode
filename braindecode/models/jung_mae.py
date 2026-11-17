@@ -1,9 +1,7 @@
 # Authors: Bruno Aristimunha <b.aristimunha@gmail.com>
 #
-# License: BSD-3-Clause
-# Adapted from https://github.com/GeoNIRS/GeoNIRS model/jung_inspired_mae.py (81f8995;
-# no licence file; paper arXiv:2610.17845), the GeoNIRS authors' paper-guided
-# implementation of Jung et al. (2025).
+# Adapted from https://github.com/GeoNIRS/GeoNIRS model/jung_inspired_mae.py (81f8995),
+# the GeoNIRS authors' implementation of Jung, Lee and An (2025).
 
 from __future__ import annotations
 
@@ -24,7 +22,7 @@ from braindecode.models.base import EEGModuleMixin
 from braindecode.models.util import fnirs_channel_order, fnirs_split_hbo_hbr
 
 
-class JungInspiredMAE(EEGModuleMixin, nn.Module):
+class JungMAE(EEGModuleMixin, nn.Module):
     r"""JungMAE, the GeoNIRS authors' masked autoencoder after Jung et al. (2025).
 
     :bdg-info:`Attention/Transformer` :bdg-danger:`Foundation Model`
@@ -79,7 +77,7 @@ class JungInspiredMAE(EEGModuleMixin, nn.Module):
        .. code-block:: python
 
            payload = torch.load("jung_mae.pt", map_location="cpu", weights_only=True)
-           model = JungInspiredMAE(n_chans=40, n_outputs=2, n_times=60, sfreq=5.0)
+           model = JungMAE(n_chans=40, n_outputs=2, n_times=60, sfreq=5.0)
            model.load_state_dict(payload)
 
        It stores the model configuration (the defaults here), no data
@@ -177,7 +175,7 @@ class JungInspiredMAE(EEGModuleMixin, nn.Module):
         self.channel_order = fnirs_channel_order(self._chs_info, channel_order)
         if self.n_chans % 2:
             raise ValueError(
-                "JungInspiredMAE needs HbO/HbR pairs: n_chans must be even."
+                "JungMAE needs HbO/HbR pairs: n_chans must be even."
             )
         _check_on_non_divisible(on_non_divisible)
         self.on_non_divisible = on_non_divisible
@@ -311,7 +309,7 @@ class JungInspiredMAE(EEGModuleMixin, nn.Module):
         channel (mark a missing channel with NaN)."""
         if ch_mask is not None:
             raise ValueError(
-                "JungInspiredMAE does not accept ch_mask; use NaN channels."
+                "JungMAE does not accept ch_mask; use NaN channels."
             )
         # (batch, n_chans, n_times) -> (batch, n_pairs, n_patches, encoder_dim)
         foundation = self.encode(x, mask)["foundation"]

@@ -1,8 +1,6 @@
 # Authors: Bruno Aristimunha <b.aristimunha@gmail.com>
 #
-# License: BSD-3-Clause
-# Adapted from https://github.com/GeoNIRS/GeoNIRS (81f8995; no licence file;
-# paper arXiv:2610.17845).
+# Adapted from https://github.com/GeoNIRS/GeoNIRS (81f8995; paper arXiv:2610.17845).
 
 from __future__ import annotations
 

@@ -970,7 +970,7 @@ models_mandatory_parameters: list[
         lambda: {"chs_info": _fnirs_chs_info(2), "n_times": 100, "sfreq": 10.0},
     ),
     (
-        "JungInspiredMAE",
+        "JungMAE",
         ["n_chans", "n_outputs", "n_times"],
         lambda: {"chs_info": _fnirs_chs_info(2), "n_times": 150, "sfreq": 5.0},
     ),
