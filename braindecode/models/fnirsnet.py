@@ -28,7 +28,7 @@ class FNIRSNet(EEGModuleMixin, nn.Module, license="apache-2.0"):
        :align: center
        :alt: fNIRSNet architecture
 
-       Fig. 2 of Wang et al. (2023), CC BY 4.0: "(a) Overview architecture of
+       Fig. 2 of Wang et al. (2023), CC BY 4.0, cropped: "(a) Overview architecture of
        fNIRSNet. (b) Schema of receptive fields. [...] (c) Depthwise separable
        convolution."
 
@@ -74,12 +74,14 @@ class FNIRSNet(EEGModuleMixin, nn.Module, license="apache-2.0"):
     n_dhr_filters : int, default=4
         DHRConv filters, :math:`F_1` (``num_DHRConv``). The paper's
         subject-specific value.
-    n_dw_filters : int, default=8
+    n_pw_filters : int, default=8
         PWConv filters, the width of the global module, :math:`F_2`
-        (``num_DWConv``). The paper's subject-specific value.
+        (``num_DWConv`` in the authors' code). The paper's subject-specific
+        value.
     dhr_kernel_length : int or None, default=None
-        DHRConv width :math:`k` (``DHRConv_width``). ``None`` uses :math:`S`,
-        the paper's Guideline 1; a shorter kernel (not in the paper) gives
+        DHRConv width :math:`k` (``DHRConv_width``), ``1 <= k <= S``. ``None``
+        uses :math:`S`, the paper's Guideline 1. A shorter kernel, as in the
+        paper's Table IV (:math:`k` = 10, 20, 30 on UFFT), gives
         :math:`F_2 (S - k + 1)` features to the FC layer.
     activation : type[nn.Module], default=nn.Sigmoid
         Activation after each BN (``act``). Guideline 3: activations "with
@@ -98,8 +100,9 @@ class FNIRSNet(EEGModuleMixin, nn.Module, license="apache-2.0"):
     metrics of the last epoch, averaged over folds and subjects.
 
     Replication on UFFT, accuracy / macro-F1 in %, the authors' training loops
-    around this port and around their ``fNIRSNet`` (seeds 0-2; LOSO with
-    :math:`F_1 = 8`, :math:`F_2 = 16`):
+    around this port and around their ``fNIRSNet`` (seeds 0-2). The LOSO runs
+    use :math:`F_1 = 8`, :math:`F_2 = 16`, as the authors' ``LOSO_Train.py``;
+    the paper's subject-independent row uses 16 and 32:
 
     ===================  ===============  =============  =============
     UFFT                 Paper, Table II  This port      Authors' code
@@ -108,7 +111,7 @@ class FNIRSNet(EEGModuleMixin, nn.Module, license="apache-2.0"):
     Subject-independent  64.43 / 63.57    64.52 / 63.67  64.51 / 63.67
     ===================  ===============  =============  =============
 
-    `License <https://github.com/wzhlearning/fNIRSNet/blob/main/LICENSE>`_
+    `License <https://github.com/wzhlearning/fNIRSNet/blob/11d9dad/LICENSE>`_
 
     References
     ----------
@@ -125,7 +128,7 @@ class FNIRSNet(EEGModuleMixin, nn.Module, license="apache-2.0"):
         sfreq: float | None = None,
         *,
         n_dhr_filters: int = 4,
-        n_dw_filters: int = 8,
+        n_pw_filters: int = 8,
         dhr_kernel_length: int | None = None,
         activation: type[nn.Module] = nn.Sigmoid,
     ) -> None:
@@ -133,20 +136,25 @@ class FNIRSNet(EEGModuleMixin, nn.Module, license="apache-2.0"):
             n_outputs, n_chans, chs_info, n_times, input_window_seconds, sfreq
         )
         del n_outputs, n_chans, chs_info, n_times, input_window_seconds, sfreq
-        kernel_length = dhr_kernel_length or self.n_times
+        kernel_length = self.n_times if dhr_kernel_length is None else dhr_kernel_length
+        if not 1 <= kernel_length <= self.n_times:
+            raise ValueError(
+                f"dhr_kernel_length must be in [1, n_times={self.n_times}], "
+                f"got {dhr_kernel_length}."
+            )
         self.to_fnirs_tensor = Rearrange("batch chans time -> batch 1 chans time")
         self.conv1 = nn.Conv2d(1, n_dhr_filters, (1, kernel_length))
         self.bn1 = nn.BatchNorm2d(n_dhr_filters)
         self.conv2 = nn.Sequential(
             OrderedDict(
                 depth_conv=DepthwiseConv2d(n_dhr_filters, 1, (self.n_chans, 1)),
-                point_conv=nn.Conv2d(n_dhr_filters, n_dw_filters, 1),
+                point_conv=nn.Conv2d(n_dhr_filters, n_pw_filters, 1),
             )
         )
-        self.bn2 = nn.BatchNorm2d(n_dw_filters)
+        self.bn2 = nn.BatchNorm2d(n_pw_filters)
         self.activation = activation()
         self.flatten = Rearrange("batch filters 1 time -> batch (filters time)")
-        n_features = n_dw_filters * (self.n_times - kernel_length + 1)
+        n_features = n_pw_filters * (self.n_times - kernel_length + 1)
         self.final_layer = nn.Linear(n_features, self.n_outputs)
         self.mapping = {f"fc.{k}": f"final_layer.{k}" for k in ("weight", "bias")}
 
@@ -173,10 +181,11 @@ class FNIRSNet(EEGModuleMixin, nn.Module, license="apache-2.0"):
         x = self.conv1(x)  # DHRConv: (batch, n_dhr_filters, n_chans, time')
         x = self.bn1(x)  # (batch, n_dhr_filters, n_chans, time')
         x = self.activation(x)  # (batch, n_dhr_filters, n_chans, time')
-        x = self.conv2(x)  # DWConv, PWConv: (batch, n_dw_filters, 1, time')
-        x = self.bn2(x)  # (batch, n_dw_filters, 1, time')
-        x = self.activation(x)  # (batch, n_dw_filters, 1, time')
-        features = self.flatten(x)  # (batch, n_dw_filters * time')
+        x = self.conv2.depth_conv(x)  # DWConv: (batch, n_dhr_filters, 1, time')
+        x = self.conv2.point_conv(x)  # PWConv: (batch, n_pw_filters, 1, time')
+        x = self.bn2(x)  # (batch, n_pw_filters, 1, time')
+        x = self.activation(x)  # (batch, n_pw_filters, 1, time')
+        features = self.flatten(x)  # (batch, n_pw_filters * time')
         if return_features:
             return {"features": features, "cls_token": None}
         return self.final_layer(features)  # (batch, n_outputs)

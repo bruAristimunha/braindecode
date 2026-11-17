@@ -6443,8 +6443,8 @@ def _interleaved_fnirs_chs(n_pairs=4):
     ],
 )
 def test_fnirs_task_models_options_and_features_feed_head(model_cls, kwargs):
-    """HbO/HbR ``chs_info`` or odd channel counts; ``final_layer(features)`` equals
-    the logits in eval and train mode, and gradients reach the input."""
+    """HbO/HbR ``chs_info`` or an explicit ``n_chans``; ``final_layer(features)``
+    equals the logits in eval and train mode, and gradients reach the input."""
     if "n_chans" not in kwargs:
         kwargs = dict(kwargs, chs_info=_interleaved_fnirs_chs())
     model = model_cls(n_outputs=3, n_times=60, sfreq=5.0, **kwargs)
@@ -6460,22 +6460,81 @@ def test_fnirs_task_models_options_and_features_feed_head(model_cls, kwargs):
     assert torch.isfinite(x.grad).all()
 
 
-def test_fnirsnet_loads_reference_state_dict():
-    """The authors' keys (``conv1``, ``bn1``, ``conv2``, ``bn2``, ``fc``) load
-    through ``mapping`` with ``strict=True``; the forward is the paper's Fig. 2:
-    DHRConv, BN, sigmoid, DWConv + PWConv, BN, sigmoid, FC."""
-    model = FNIRSNet(n_chans=8, n_outputs=3, n_times=20).eval()
-    reference = {
-        k.replace("final_layer.", "fc."): v for k, v in model.state_dict().items()
-    }
-    assert {k.split(".")[0] for k in reference} == {"conv1", "bn1", "conv2", "bn2", "fc"}
-    loaded = FNIRSNet(n_chans=8, n_outputs=3, n_times=20).eval()
-    loaded.load_state_dict(reference, strict=True)
-    x = torch.randn(2, 8, 20)
-    with torch.no_grad():
-        dhr = torch.sigmoid(model.bn1(model.conv1(x.unsqueeze(1))))
-        dws = torch.sigmoid(model.bn2(model.conv2(dhr)))
-        assert torch.equal(loaded(x), model.final_layer(dws.flatten(1)))
+class _AuthorsFNIRSNet(torch.nn.Module):
+    """fNIRSNet.py of wzhlearning/fNIRSNet@11d9dad (Apache-2.0), verbatim
+    apart from formatting: the reference for the port."""
+
+    def __init__(self, num_class, DHRConv_width=40, DWConv_height=40,
+                 num_DHRConv=4, num_DWConv=8):
+        super().__init__()
+        self.conv1 = torch.nn.Conv2d(1, num_DHRConv, kernel_size=(1, DHRConv_width))
+        self.bn1 = torch.nn.BatchNorm2d(num_DHRConv)
+        self.conv2 = torch.nn.Module()
+        self.conv2.depth_conv = torch.nn.Conv2d(
+            num_DHRConv, num_DHRConv, kernel_size=(DWConv_height, 1),
+            groups=num_DHRConv,
+        )
+        self.conv2.point_conv = torch.nn.Conv2d(num_DHRConv, num_DWConv, kernel_size=1)
+        self.bn2 = torch.nn.BatchNorm2d(num_DWConv)
+        self.fc = torch.nn.Linear(num_DWConv, num_class)
+        self.act = torch.nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.act(self.bn1(self.conv1(x)))
+        x = self.act(self.bn2(self.conv2.point_conv(self.conv2.depth_conv(x))))
+        x = x.view(x.size()[0], -1)
+        return self.fc(x)
+
+
+@pytest.mark.parametrize("n_chans, n_times, f1, f2", [(40, 40, 4, 8), (72, 30, 16, 32)])
+def test_fnirsnet_matches_the_authors_module(n_chans, n_times, f1, f2):
+    """The authors' state dict loads strictly through ``mapping``; outputs,
+    gradients and BatchNorm statistics then equal the authors' module in eval
+    and train mode, also after optimizer steps."""
+    torch.manual_seed(0)
+    reference = _AuthorsFNIRSNet(3, n_times, n_chans, f1, f2)
+    with torch.no_grad():  # non-trivial BatchNorm statistics and affine terms
+        for bn in (reference.bn1, reference.bn2):
+            bn.running_mean.uniform_(-1, 1)
+            bn.running_var.uniform_(0.5, 2)
+            bn.weight.uniform_(0.5, 2)
+            bn.bias.uniform_(-1, 1)
+    model = FNIRSNet(
+        n_chans=n_chans, n_outputs=3, n_times=n_times, n_dhr_filters=f1, n_pw_filters=f2
+    )
+    model.load_state_dict(reference.state_dict(), strict=True)
+    x = torch.randn(6, n_chans, n_times)
+    for training in (False, True):
+        reference.train(training)
+        model.train(training)
+        torch.testing.assert_close(model(x), reference(x.unsqueeze(1)), rtol=0, atol=0)
+    optimizers = [torch.optim.AdamW(m.parameters(), lr=1e-2) for m in (reference, model)]
+    y = torch.tensor([0, 1, 2, 0, 1, 2])
+    for _ in range(3):
+        for net, optimizer, inputs in zip(
+            (reference, model), optimizers, (x.unsqueeze(1), x)
+        ):
+            optimizer.zero_grad()
+            torch.nn.functional.cross_entropy(net(inputs), y).backward()
+            optimizer.step()
+    port_state = model.state_dict()
+    for key, value in reference.state_dict().items():
+        torch.testing.assert_close(
+            port_state[key.replace("fc.", "final_layer.")], value, rtol=0, atol=0
+        )
+
+
+@pytest.mark.parametrize("kernel, n_params", [(None, 419), (30, 619), (20, 819), (10, 1019)])
+def test_fnirsnet_parameter_counts_of_table_iv(kernel, n_params):
+    """UFFT (C = S = 40) parameter counts of the paper's Tables III and IV."""
+    model = FNIRSNet(n_chans=40, n_outputs=3, n_times=40, dhr_kernel_length=kernel)
+    assert sum(p.numel() for p in model.parameters()) == n_params
+
+
+def test_fnirsnet_kernel_length_out_of_range_raises():
+    for bad in (0, 41):
+        with pytest.raises(ValueError, match="dhr_kernel_length"):
+            FNIRSNet(n_chans=40, n_outputs=3, n_times=40, dhr_kernel_length=bad)
 
 
 def test_s4d_real_arithmetic_matches_complex_fft():

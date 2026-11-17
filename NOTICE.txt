@@ -101,8 +101,8 @@ The following figures are reproduced from open-access papers under the
 Creative Commons Attribution 4.0 International License (each docstring
 cites the paper):
 
-- `docs/_static/model/fnirsnet.png` (Wang et al., IEEE TNSRE 2023, Fig. 2)
-- `docs/_static/model/mtrenirs.png` (Chae et al., arXiv:2610.36159, Fig. 2)
+- `docs/_static/model/fnirsnet.png` (Wang et al., IEEE TNSRE 2023, Fig. 2, cropped)
+- `docs/_static/model/mtrenirs.png` (Chae et al., arXiv:2610.36159, Fig. 2, cropped)
 
 ### USC Academic License Files
 
