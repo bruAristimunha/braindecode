@@ -39,39 +39,87 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
 
     .. versionadded:: 2.1
 
-    Each channel is cut into windows of ``window_samples`` samples; a window
-    is one token, the sum of a projection of its samples and a Fourier-feature
-    MLP of the channel's position and chromophore. A pre-norm Transformer with
-    per-head QK LayerNorm and a rotary embedding of the window index encodes
-    all tokens jointly. Positions (``loc[:3]``) and HbO/HbR (from
-    ``coil_type``, else the channel name) come from ``chs_info`` or the
-    ``coordinates`` argument; a montage without any location needs
-    ``coordinates``. As in the reference, a channel without a location (NaN
-    or all-zero ``loc[:3]``, NaN in ``coordinates``) is left out of the
-    attention and its tokens are zero. Windows with a NaN sample are masked.
+    MtReNIRS is "a self-supervised foundation model for transferable
+    neurovascular representations" :footcite:`microsoft2026mtrenirs`. This
+    class is its encoder with a linear head; the masked-autoencoder decoder of
+    pretraining is not part of it.
+
+    **Tokens.** "We represented each token by a chromophore channel :math:`c`
+    and temporal window :math:`t`, where :math:`c = (i, b_c)` identifies an
+    S-D pair :math:`i` and chromophore type :math:`b_c \in \{0, 1\}`, with 0
+    and 1 denoting HbO and HbR, respectively." "Each 10-s signal segment
+    :math:`x_{c,t} \in \mathbb{R}^{100}` was projected by a linear layer to a
+    128-dimensional signal embedding." The canonical spatial coordinate
+    :math:`q_c \in \mathbb{R}^3` of the pair is concatenated "with the binary
+    chromophore indicator :math:`b_c` to form
+    :math:`u_c = [q_c^\top, b_c]^\top \in \mathbb{R}^4`", encoded "with six
+    bands of Fourier features"
+
+    .. math::
+
+        \phi(u_c) = \left[\sin(2^k \pi u_{c,j}), \cos(2^k \pi u_{c,j})\right]
+        _{j = 1, \dots, 4}^{k = 0, \dots, 5} \in \mathbb{R}^{48},
+
+    and "a 48 -> 128 -> 128 multilayer perceptron (MLP) with GELU activation
+    projected these features". "We summed the signal and spatio-chromophore
+    embeddings to form token :math:`z_{c,t} \in \mathbb{R}^{128}`."
+
+    **Encoder.** "The encoder contained six pre-layer-normalized Transformer
+    blocks with a 128-dimensional state, four attention heads, a
+    512-dimensional MLP, and 0.1 dropout. Per-head layer normalization
+    stabilized queries and keys. To preserve cross-window order without
+    conflating time with spatial identity, rotary position encoding (RoPE)
+    with base 500 encoded the temporal-window index. All S-D pairs from the
+    same window shared that index; spatial identity entered only through the
+    canonical coordinate embedding."
+
+    **Input.** ``(batch, n_chans, n_times)`` HbO/HbR channels. Positions
+    (``loc[:3]``, metres) and HbO/HbR (from ``coil_type``, else the channel
+    name) come from ``chs_info`` or the ``coordinates`` argument; a montage
+    without any location needs ``coordinates``. As in the reference, a channel
+    without a location (NaN or all-zero ``loc[:3]``, NaN in ``coordinates``)
+    is left out of the attention and its tokens are zero. Windows with a NaN
+    sample are masked.
 
     :meth:`load_state_dict` takes the official ``mtrenirs_10s.pt`` checkpoint.
-    Its weights expect 10 Hz HbO/HbR in 100-sample (10 s) windows, each
-    channel z-scored over its run and clipped at 6 (the reference's
-    ``normalize_run``), and Standard 10-05 positions: the reference snaps
-    each channel to its nearest 10-05 position (``mtrenirs-alignment``)
-    before encoding, while this port reads ``loc[:3]`` as given.
+    The paper's preprocessing, which its weights expect: the modified
+    Beer-Lambert law (PPF 6.0), then "we band-pass filtered each run from
+    0.01 to 0.5 Hz, resampled to 10 Hz", and "z-scored each retained
+    chromophore channel over its complete run using the population mean and
+    standard deviation, then clipped model inputs to :math:`[-6, 6]`", in
+    100-sample (10 s) windows. The released ``from_mne_raw`` does not apply
+    that band-pass: it calls MNE's default ``raw.filter(0.01, 0.5)``, an FIR
+    with a 2 Hz upper transition band that passes 0.87 of the amplitude at
+    1 Hz and 0.50 at 1.5 Hz. The paper's SujinBak results are reproduced with
+    a band-pass that removes the content above 0.5 Hz, such as the zero-phase
+    Butterworth
+    ``raw.filter(0.01, 0.5, method="iir", iir_params=dict(order=3, ftype="butter"))``
+    (:gh:`1564`). Positions are the paper's canonical 10-05 slots: the
+    reference snaps each channel to its nearest 10-05 position
+    (``mtrenirs-alignment``) before encoding, while this port reads
+    ``loc[:3]`` as given.
     Adapted from the authors' code
     (`License <https://github.com/microsoft/MtReNIRS/blob/main/LICENSE.txt>`_).
 
     Parameters
     ----------
     window_samples : int, default=100
-        Samples per token window.
-    d_model, depth, n_heads, mlp_hidden : int, default=128, 6, 4, 512
-        Width, blocks, heads (even ``d_model // n_heads``) and feed-forward
-        width of the Transformer.
+        Samples of the window :math:`x_{c,t}` of one token (10 s at 10 Hz).
+    d_model : int, default=128
+        Width of the tokens and of the Transformer state.
+    depth : int, default=6
+        Pre-norm Transformer blocks.
+    n_heads : int, default=4
+        Attention heads; ``d_model // n_heads`` must be even for RoPE.
+    mlp_hidden : int, default=512
+        Width of the feed-forward MLP of each block.
     fourier_num_bands : int, default=6
-        Frequencies ``pi * 2**k``, ``k < fourier_num_bands``, per coordinate.
+        Fourier bands per coordinate, frequencies :math:`2^k \pi`,
+        :math:`k < 6`.
     spatial_mlp_hidden : int, default=128
-        Hidden width of the spatial MLP.
+        Hidden width of the spatio-chromophore MLP.
     rope_base : float, default=500.0
-        Base of the rotary embedding.
+        Base of the rotary embedding of the window index.
     qk_norm : bool, default=True
         Per-head LayerNorm of queries and keys.
     pool : {"temporal_mean", "channel_temporal_mean", "flatten"}, default="temporal_mean"
@@ -82,13 +130,16 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
         A last window shorter than ``window_samples`` is dropped (the
         reference's ``remainder="drop"``), zero-padded (its ``"pad"``) or
         refused.
-    pos_center, pos_scale : tuple of float, float
-        Centre and scale (m) standardizing the positions; the defaults are
-        those of the released checkpoint.
+    pos_center : tuple of float
+        Centre (m) of the canonical coordinates; the paper normalizes them
+        "with one center and RMS scale computed from the pretraining corpus",
+        and the default is that of the released checkpoint.
+    pos_scale : float
+        RMS scale (m) of the canonical coordinates, as ``pos_center``.
     drop_prob : float, default=0.1
         Dropout of the attention weights and blocks.
     activation : type[nn.Module], default=nn.GELU
-        Activation of the spatial MLP and the feed-forward blocks.
+        Activation of the spatio-chromophore MLP and the feed-forward blocks.
 
     References
     ----------
