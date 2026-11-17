@@ -9,11 +9,11 @@ from __future__ import annotations
 from typing import Literal
 
 import torch
-from einops.layers.torch import Rearrange
+from einops.layers.torch import Rearrange, Reduce
 from torch import nn
 
 from braindecode.models.base import EEGModuleMixin
-from braindecode.models.util import fnirs_channel_order, fnirs_split_hbo_hbr
+from braindecode.models.util import fnirs_channel_order
 from braindecode.modules import (
     FeedForwardBlock,
     MultiHeadAttention,
@@ -28,26 +28,40 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
 
     .. versionadded:: 2.1
 
-    Two transformer branches on paired HbO/HbR fNIRS windows
-    :footcite:`wang2022fnirst`: a spatial branch with one token per group of
-    ``spatial_kernel_size`` neighbouring channels and a channel branch with one
-    token per channel, each from a strided temporal convolution. The two pooled
-    outputs are concatenated, normalized and classified.
+    From the abstract :footcite:`wang2022fnirst`: "Inspired by the success of
+    Transformer based on self-attention mechanism in the fields of natural
+    language processing and computer vision, we propose an fNIRS classification
+    network based on Transformer, named fNIRS-T. We explore the spatial-level
+    and channel-level representation of fNIRS signals to improve data
+    utilization and network representation capacity." On its dataset C, the
+    ternary classification of three overt movements (30 subjects), the abstract
+    reports 75.49 % test accuracy for fNIRS-T.
+
+    The layers follow the authors' code. The HbO and HbR halves of ``x`` form
+    two input planes. The spatial-level branch (``to_patch_embedding``,
+    ``transformer_patch``) has one token per group of ``spatial_kernel_size``
+    neighbouring channels, the channel-level branch (``to_channel_embedding``,
+    ``transformer_channel``) one token per channel, each from a strided
+    temporal convolution. Each branch prepends a class token, adds a learned
+    positional embedding and runs ``depth`` pre-norm transformer blocks. The
+    two pooled outputs are concatenated, normalized (``final_norm``) and
+    classified (``final_layer``).
 
     `License <https://github.com/wzhlearning/fNIRS-Transformer/blob/main/LICENSE>`_
 
     Parameters
     ----------
     dim : int, default=64
-        Token width of both branches.
+        "last dimension of output tensor after linear transformation" (the
+        authors' code): token width of both branches.
     depth : int, default=6
-        Transformer blocks per branch.
+        "number of Transformer blocks" per branch.
     heads : int, default=8
-        Attention heads per block.
+        "number of the multi-head self-attention".
     mlp_dim : int, default=64
-        Hidden width of the feed-forward sub-layers.
+        "dimension of the MLP layer": hidden width of the feed-forward sub-layers.
     pool : {"cls", "mean"}, default="cls"
-        Token pooling of each branch.
+        "'cls' is [CLS] token pooling, 'mean' is average pooling", per branch.
     dim_head : int, default=64
         Width of each attention head.
     conv_channels : int, default=8
@@ -66,7 +80,7 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
     drop_prob : float, default=0.0
         Dropout in the attention and feed-forward sub-layers.
     emb_drop_prob : float, default=0.0
-        Dropout on the token + positional embeddings.
+        "dropout for patch embeddings", after the positional embeddings.
     activation : type[nn.Module], default=nn.GELU
         Activation of the feed-forward sub-layers.
 
@@ -75,7 +89,7 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
     .. footbibliography::
     """
 
-    _preblock = False  # FNIRSPreT prepends the moving-average frontend
+    _preblock = False  # FNIRSPreT prepends the preprocessing module
 
     def __init__(
         self,
@@ -121,15 +135,17 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
                 f"got {n_chromophores}."
             )
         pairs_info = self._chs_info if n_chromophores == 2 else None
-        self.channel_order = fnirs_channel_order(pairs_info, channel_order)
-        self.n_chromophores = n_chromophores
+        order = fnirs_channel_order(pairs_info, channel_order)
+        channel_axes = "(chans chrom)" if order == "interleaved" else "(chrom chans)"
+        self.to_chromophore_planes = Rearrange(
+            f"batch {channel_axes} time -> batch chrom chans time",
+            chrom=n_chromophores,
+        )
         n_phys_chans = self.n_chans // n_chromophores
         self.pool = pool
         n_bins = (self.n_times - temporal_kernel_size) // temporal_stride + 1
         spatial_kernel = min(spatial_kernel_size, n_phys_chans)
-        self.pre = (
-            _FNIRSPreFilter(self.n_times, n_chromophores) if self._preblock else None
-        )
+        self.pre = _PreBlock(self.n_times, n_chromophores) if self._preblock else None
 
         def branch() -> nn.Sequential:
             return nn.Sequential(
@@ -155,7 +171,7 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
                 (spatial_kernel, temporal_kernel_size),
                 (1, temporal_stride),
             ),
-            Rearrange("b c h w -> b h (c w)"),
+            Rearrange("batch maps tokens bins -> batch tokens (maps bins)"),
             nn.Linear(n_bins * conv_channels, dim),
             nn.LayerNorm(dim),
         )
@@ -173,7 +189,7 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
                 (1, temporal_kernel_size),
                 (1, temporal_stride),
             ),
-            Rearrange("b c h w -> b h (c w)"),
+            Rearrange("batch maps tokens bins -> batch tokens (maps bins)"),
             nn.Linear(n_bins * conv_channels, dim),
             nn.LayerNorm(dim),
         )
@@ -182,6 +198,7 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
         self.dropout_channel = nn.Dropout(emb_drop_prob)
         self.transformer_channel = branch()
 
+        self.token_mean = Reduce("batch tokens dim -> batch dim", "mean")
         self.final_norm = nn.LayerNorm(dim * 2)
         self.final_layer = nn.Linear(dim * 2, self.n_outputs)
         self._init_parameters()
@@ -209,44 +226,43 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
         True samples are zeroed first. ``ch_mask`` is refused: the spatial
         kernel and positional tables span every channel. ``return_features``
         gives the normalized pooled ``"features"`` and, as ``"cls_token"``, the
-        two branches' CLS tokens ``(batch, 2 * dim)``."""
+        two branches' class tokens ``(batch, 2 * dim)``."""
         if ch_mask is not None:
             raise ValueError("FNIRST does not accept ch_mask (fixed channel layout).")
         if mask is not None:
-            x = x.masked_fill(mask, 0.0)
+            x = x.masked_fill(mask, 0.0)  # (batch, n_chans, n_times)
         # (batch, n_chans, n_times) -> (batch, n_chromophores, n_phys_chans, n_times)
-        if self.n_chromophores == 2:
-            hbo, hbr = fnirs_split_hbo_hbr(x, self.channel_order)
-            x = torch.stack([hbo, hbr], dim=1)
-        else:
-            x = x.unsqueeze(1)
+        x = self.to_chromophore_planes(x)
         if self.pre is not None:
-            x = self.pre(x)
+            x = self.pre(x)  # (batch, n_chromophores, n_phys_chans, n_times)
         batch_size = x.shape[0]
-        # -> (batch, n_groups, dim) -> (batch, n_groups + 1, dim)
-        patch = self.to_patch_embedding(x)
-        patch = torch.cat(
-            (self.cls_token_patch.expand(batch_size, -1, -1), patch), dim=1
-        )
-        patch = self.dropout_patch(patch + self.pos_embedding_patch)
-        patch = self.transformer_patch(patch)
-        # -> (batch, n_phys_chans, dim) -> (batch, n_phys_chans + 1, dim)
-        channel = self.to_channel_embedding(x)
-        channel = torch.cat(
-            (self.cls_token_channel.expand(batch_size, -1, -1), channel), dim=1
-        )
-        channel = self.dropout_channel(channel + self.pos_embedding_channel)
-        channel = self.transformer_channel(channel)
-        # 2 x (batch, n_tokens + 1, dim) -> (batch, 2 * dim)
-        cls_tokens = torch.cat((patch[:, 0], channel[:, 0]), dim=1)
+        # spatial level, n_groups = n_phys_chans - spatial_kernel_size + 1 tokens
+        patch = self.to_patch_embedding(x)  # (batch, n_groups, dim)
+        cls_patch = self.cls_token_patch.expand(batch_size, -1, -1)  # (batch, 1, dim)
+        patch = torch.cat((cls_patch, patch), dim=1)  # (batch, n_groups + 1, dim)
+        patch = patch + self.pos_embedding_patch  # (batch, n_groups + 1, dim)
+        patch = self.dropout_patch(patch)  # (batch, n_groups + 1, dim)
+        patch = self.transformer_patch(patch)  # (batch, n_groups + 1, dim)
+        # channel level, n_tokens = n_phys_chans + 1
+        channel = self.to_channel_embedding(x)  # (batch, n_phys_chans, dim)
+        cls_channel = self.cls_token_channel.expand(batch_size, -1, -1)
+        channel = torch.cat((cls_channel, channel), dim=1)  # (batch, n_tokens, dim)
+        channel = channel + self.pos_embedding_channel  # (batch, n_tokens, dim)
+        channel = self.dropout_channel(channel)  # (batch, n_tokens, dim)
+        channel = self.transformer_channel(channel)  # (batch, n_tokens, dim)
+        patch_token = patch[:, 0]  # (batch, dim)
+        channel_token = channel[:, 0]  # (batch, dim)
+        cls_tokens = torch.cat((patch_token, channel_token), dim=1)  # (batch, 2 * dim)
         if self.pool == "mean":
-            features = torch.cat((patch.mean(dim=1), channel.mean(dim=1)), dim=1)
+            patch = self.token_mean(patch)  # (batch, dim)
+            channel = self.token_mean(channel)  # (batch, dim)
+            features = torch.cat((patch, channel), dim=1)  # (batch, 2 * dim)
         else:
             features = cls_tokens
-        features = self.final_norm(features)
+        features = self.final_norm(features)  # (batch, 2 * dim)
         if return_features:
             return {"features": features, "cls_token": cls_tokens}
-        return self.final_layer(features)
+        return self.final_layer(features)  # (batch, n_outputs)
 
 
 class FNIRSPreT(FNIRST, license="mit"):  # the kwarg is not inherited
@@ -256,11 +272,15 @@ class FNIRSPreT(FNIRST, license="mit"):  # the kwarg is not inherited
 
     .. versionadded:: 2.1
 
-    :class:`~braindecode.models.FNIRST` for raw signals
-    :footcite:`wang2022fnirst`: three moving averages (kernels 5, 13, 7) and a
-    LayerNorm over time per chromophore come first, in place of offline
-    band-pass filtering and baseline correction. The parameters are those of
-    :class:`~braindecode.models.FNIRST`.
+    From the abstract :footcite:`wang2022fnirst`: "a preprocessing module,
+    which consists of one-dimensional average pooling and layer normalization,
+    is designed to replace filtering and baseline correction of data
+    preprocessing. It makes fNIRS-T an end-to-end network, called fNIRS-PreT."
+
+    :class:`~braindecode.models.FNIRST` with that preprocessing module
+    (``pre``) first: as in the authors' code, three moving averages (kernels
+    5, 13 and 7) and a LayerNorm over time per chromophore. The parameters are
+    those of :class:`~braindecode.models.FNIRST`.
 
     `License <https://github.com/wzhlearning/fNIRS-Transformer/blob/main/LICENSE>`_
 
@@ -272,7 +292,9 @@ class FNIRSPreT(FNIRST, license="mit"):  # the kwarg is not inherited
     _preblock = True
 
 
-class _FNIRSPreFilter(nn.Module):
+class _PreBlock(nn.Module):
+    """The authors' preprocessing module: moving averages, then LayerNorm over time."""
+
     def __init__(self, n_times: int, n_chromophores: int) -> None:
         super().__init__()
         self.smooth = nn.Sequential(  # "same" padding
@@ -285,7 +307,11 @@ class _FNIRSPreFilter(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # (batch, n_chromophores, n_phys_chans, n_times) -> same shape
-        return torch.stack(
-            [norm(self.smooth(x[:, i])) for i, norm in enumerate(self.norms)], dim=1
-        )
+        planes = []
+        for chromophore, norm in enumerate(self.norms):
+            plane = x[:, chromophore]  # (batch, n_phys_chans, n_times)
+            plane = self.smooth(plane)  # (batch, n_phys_chans, n_times)
+            plane = norm(plane)  # (batch, n_phys_chans, n_times)
+            planes.append(plane)
+        # (batch, n_chromophores, n_phys_chans, n_times)
+        return torch.stack(planes, dim=1)
