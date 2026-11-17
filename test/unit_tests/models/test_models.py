@@ -6533,7 +6533,7 @@ def test_fnirst_seeded_reset_and_cls_tokens(model_cls):
     """A seeded reset_parameters() repeats the seeded constructor; cls_token is
     the two branches' CLS tokens, not the pooled features."""
     torch.manual_seed(1)
-    model = model_cls(n_chans=4, n_outputs=2, n_times=60, depth=1, heads=2)
+    model = model_cls(n_chans=4, n_outputs=2, n_times=60, depth=1, num_heads=2)
     built = {k: v.clone() for k, v in model.state_dict().items()}
     torch.manual_seed(1)
     model.reset_parameters()
