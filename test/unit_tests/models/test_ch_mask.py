@@ -147,8 +147,8 @@ _CASES = {
     ),
     "CORTEG": lambda: (_corteg(), 64, ("pos", _positions, True)),
     "MtReNIRS": lambda: (
-        MtReNIRS(n_chans=3, n_outputs=3, n_times=100, window_samples=50, d_model=32,
-                 depth=1, n_heads=2, mlp_hidden=64, pool="channel_temporal_mean"),
+        MtReNIRS(n_chans=3, n_outputs=3, n_times=100, window_samples=50, embed_dim=32,
+                 depth=1, num_heads=2, mlp_dim=64, pool="channel_temporal_mean"),
         100,
         ("coordinates", lambda i, n: torch.rand((n, 4), generator=torch.Generator().manual_seed(i)), True),
     ),
@@ -279,8 +279,8 @@ def test_fnirs_chs_info_ch_mask_matches_each_recording_alone(name):
         alone = [{"geometry": model.default_geometry[:n_real]} for n_real in N_REAL]
     else:
         model = MtReNIRS(chs_info=_mne_fnirs_chs(3), n_outputs=3, n_times=100,
-                         window_samples=50, d_model=32, depth=1, n_heads=2,
-                         mlp_hidden=64, pool="channel_temporal_mean")
+                         window_samples=50, embed_dim=32, depth=1, num_heads=2,
+                         mlp_dim=64, pool="channel_temporal_mean")
         alone = [
             {"coordinates": model.default_coordinates[: 2 * n_real]} for n_real in N_REAL
         ]
@@ -366,8 +366,8 @@ _FIXED_HEADS = {
     ),
     "MEGGPT": lambda: (_small_meggpt(), 16),
     "MtReNIRS-temporal_mean": lambda: (
-        MtReNIRS(n_chans=3, n_outputs=3, n_times=100, window_samples=50, d_model=32,
-                 depth=1, n_heads=2, mlp_hidden=64),
+        MtReNIRS(n_chans=3, n_outputs=3, n_times=100, window_samples=50, embed_dim=32,
+                 depth=1, num_heads=2, mlp_dim=64),
         100,
     ),
 }

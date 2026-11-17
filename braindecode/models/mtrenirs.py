@@ -110,19 +110,19 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
     ----------
     window_samples : int, default=100
         Samples per token window :math:`x_{c,t}` (10 s at 10 Hz); ``data.t_win``.
-    d_model : int, default=128
+    embed_dim : int, default=128
         Token and Transformer width; ``model.d_model``.
     depth : int, default=6
         Transformer blocks; ``model.encoder.depth``.
-    n_heads : int, default=4
-        Attention heads, with an even ``d_model // n_heads`` for RoPE;
+    num_heads : int, default=4
+        Attention heads, with an even ``embed_dim // num_heads`` for RoPE;
         ``model.encoder.n_heads``.
-    mlp_hidden : int, default=512
+    mlp_dim : int, default=512
         Feed-forward width of each block; ``model.encoder.mlp_hidden``.
-    fourier_num_bands : int, default=6
+    n_fourier_bands : int, default=6
         Fourier bands :math:`2^k \pi`, :math:`k < 6`, per coordinate of
         :math:`u_c` (48 features); ``model.fourier_num_bands``.
-    spatial_mlp_hidden : int, default=128
+    spatial_hidden_dim : int, default=128
         Hidden width of the 48 -> 128 -> 128 spatio-chromophore MLP;
         ``model.spatial_mlp_hidden``.
     rope_base : float, default=500.0
@@ -130,16 +130,18 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
     qk_norm : bool, default=True
         Per-head LayerNorm of queries and keys; ``model.qk_norm``.
     pool : {"temporal_mean", "channel_temporal_mean", "flatten"}, default="temporal_mean"
-        Readout of the ``(batch, n_windows, n_chans, d_model)`` tokens: mean
-        over valid windows, over valid windows and channels (takes
-        ``ch_mask``), or all tokens (the reference's ``"flatten"``).
+        Readout of the ``(batch, n_windows, n_chans, embed_dim)`` tokens:
+        ``"temporal_mean"``, their mean over the valid windows;
+        ``"channel_temporal_mean"``, their mean over the valid windows and
+        channels (takes ``ch_mask``); ``"flatten"``, all tokens flattened (the
+        reference's ``"flatten"``).
     on_non_divisible : {"crop", "pad", "error"}, default="crop"
         A short last window is dropped (the reference's ``remainder="drop"``),
         zero-padded (``"pad"``) or refused.
-    pos_center : tuple of float
+    coordinate_center : tuple of float
         Centre (m) subtracted from :math:`q_c`, computed on the pretraining
         corpus; the checkpoint's ``data.pos_center``.
-    pos_scale : float
+    coordinate_scale : float
         RMS scale (m) dividing the centred :math:`q_c`; ``data.pos_scale``.
     drop_prob : float, default=0.1
         Dropout of attention weights, attention output and MLP;
@@ -192,24 +194,24 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
         sfreq: float | None = None,
         *,
         window_samples: int = 100,
-        d_model: int = 128,
+        embed_dim: int = 128,
         depth: int = 6,
-        n_heads: int = 4,
-        mlp_hidden: int = 512,
-        fourier_num_bands: int = 6,
-        spatial_mlp_hidden: int = 128,
+        num_heads: int = 4,
+        mlp_dim: int = 512,
+        n_fourier_bands: int = 6,
+        spatial_hidden_dim: int = 128,
         rope_base: float = 500.0,
         qk_norm: bool = True,
         pool: Literal[
             "temporal_mean", "channel_temporal_mean", "flatten"
         ] = "temporal_mean",
         on_non_divisible: Literal["crop", "pad", "error"] = "crop",
-        pos_center: tuple[float, float, float] = (
+        coordinate_center: tuple[float, float, float] = (
             0.00021245056996122003,
             -0.022675372660160065,
             0.020025914534926414,
         ),
-        pos_scale: float = 0.09265176206827164,
+        coordinate_scale: float = 0.09265176206827164,
         drop_prob: float = 0.1,
         activation: type[nn.Module] = nn.GELU,
     ) -> None:
@@ -222,10 +224,11 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
             sfreq=sfreq,
         )
         del n_outputs, n_chans, chs_info, n_times, input_window_seconds, sfreq
-        if d_model % n_heads or (d_model // n_heads) % 2:
+        if embed_dim % num_heads or (embed_dim // num_heads) % 2:
             raise ValueError(
-                f"d_model ({d_model}) must be divisible by n_heads ({n_heads}) "
-                "with an even head_dim for rotary position embeddings."
+                f"embed_dim ({embed_dim}) must be divisible by num_heads "
+                f"({num_heads}) with an even head_dim for rotary position "
+                "embeddings."
             )
         pools = ("temporal_mean", "channel_temporal_mean", "flatten")
         if pool not in pools:
@@ -236,19 +239,22 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
         self.on_non_divisible = on_non_divisible
         self.n_windows = patch_count(self.n_times, window_samples, on_non_divisible)
         self.embed = _TokenEmbedding(
-            window_samples, d_model, fourier_num_bands, spatial_mlp_hidden, activation
+            window_samples, embed_dim, n_fourier_bands, spatial_hidden_dim, activation
         )
-        dropout = float(drop_prob)
+        drop_prob = float(drop_prob)
         blocks = [
             _TransformerBlock(
-                d_model, n_heads, mlp_hidden, dropout, rope_base, qk_norm, activation
+                embed_dim, num_heads, mlp_dim, drop_prob, rope_base, qk_norm, activation
             )
             for _ in range(depth)
         ]
-        self.encoder = _Encoder(blocks, d_model)
+        self.encoder = _Encoder(blocks, embed_dim)
+        default_coordinates = _coordinates(
+            self._chs_info, coordinate_center, coordinate_scale
+        )
         self.register_buffer(
             "default_coordinates",
-            torch.from_numpy(_coordinates(self._chs_info, pos_center, pos_scale)),
+            torch.from_numpy(default_coordinates),
             persistent=False,
         )
         self.split_windows = Rearrange(
@@ -278,9 +284,9 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
             "batch windows chans dim -> batch (windows chans dim)"
         )
         self.feature_dim = {
-            "temporal_mean": self.n_chans * d_model,
-            "channel_temporal_mean": d_model,
-            "flatten": self.n_windows * self.n_chans * d_model,
+            "temporal_mean": self.n_chans * embed_dim,
+            "channel_temporal_mean": embed_dim,
+            "flatten": self.n_windows * self.n_chans * embed_dim,
         }[pool]
         self.final_layer = nn.Linear(self.feature_dim, self.n_outputs)
 
@@ -291,7 +297,7 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
         ch_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """``(batch, n_chans, n_times)`` -> tokens ``(batch, n_windows, n_chans,
-        d_model)`` and their validity ``(batch, n_windows, n_chans)``.
+        embed_dim)`` and their validity ``(batch, n_windows, n_chans)``.
         ``coordinates`` is ``(n_chans, 4)`` or ``(batch, n_chans, 4)``
         (:math:`u_c`, positions already standardized); NaN positions mark
         channels without a location."""
@@ -354,13 +360,14 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
         window_indices = torch.arange(n_windows, device=x.device)
         window_indices = window_indices.repeat_interleave(n_chans)
         window_indices = window_indices.expand(batch_size, -1)
-        # -> (batch, n_windows * n_chans, d_model): z_{c,t}
+        # -> (batch, n_windows * n_chans, embed_dim): z_{c,t}
         embedded = self.embed(tokens, coord_tokens)
         encoded = self.encoder(embedded, window_indices, valid_tokens)
         token_weight = self.token_over_features(valid_tokens)
         token_weight = token_weight.to(encoded.dtype)
         encoded = encoded * token_weight
-        # (batch, n_windows * n_chans, d_model) -> (batch, n_windows, n_chans, d_model)
+        # (batch, n_windows * n_chans, embed_dim)
+        # -> (batch, n_windows, n_chans, embed_dim)
         encoded = encoded.unflatten(1, [n_windows, n_chans])
         return encoded, valid
 
@@ -396,10 +403,10 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
                 "ch_mask needs pool='channel_temporal_mean': the other heads "
                 "are tied to the channels."
             )
-        # (batch, n_chans, n_times) -> (batch, n_windows, n_chans, d_model)
+        # (batch, n_chans, n_times) -> (batch, n_windows, n_chans, embed_dim)
         encoded, valid = self.encode_windows(x, coordinates, ch_mask)
         if self.pool == "flatten":
-            # -> (batch, n_windows * n_chans * d_model)
+            # -> (batch, n_windows * n_chans * embed_dim)
             features = self.flatten_tokens(encoded)
         else:
             # mean over the valid windows (and channels)
@@ -411,10 +418,10 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
             count = count.clamp_min(1.0)
             weighted = encoded * weight
             total = weighted.sum(dim=dims)
-            # -> (batch, n_chans, d_model) or (batch, d_model)
+            # -> (batch, n_chans, embed_dim) or (batch, embed_dim)
             features = total / count
             if self.pool == "temporal_mean":
-                # (batch, n_chans, d_model) -> (batch, n_chans * d_model)
+                # (batch, n_chans, embed_dim) -> (batch, n_chans * embed_dim)
                 features = self.flatten_channels(features)
         if return_features:
             return {"features": features, "cls_token": None}
@@ -425,19 +432,21 @@ class _TokenEmbedding(nn.Module):
     """Signal embedding of the window plus the spatio-chromophore embedding
     (an MLP of the Fourier features of :math:`u_c`)."""
 
-    def __init__(self, window_samples, d_model, num_bands, hidden, activation):
+    def __init__(
+        self, window_samples, embed_dim, n_fourier_bands, spatial_hidden_dim, activation
+    ):
         super().__init__()
         # ``signal.proj`` and ``spatial.mlp`` are the checkpoint's key paths
         self.signal = nn.Sequential(
-            OrderedDict(proj=nn.Linear(window_samples, d_model))
+            OrderedDict(proj=nn.Linear(window_samples, embed_dim))
         )
-        # 2^k pi, k = 0, ..., num_bands - 1
-        freqs = (2.0 ** torch.arange(num_bands).float()) * torch.pi
+        # 2^k pi, k = 0, ..., n_fourier_bands - 1
+        freqs = (2.0 ** torch.arange(n_fourier_bands).float()) * torch.pi
         self.register_buffer("freqs", freqs, persistent=False)
         mlp = nn.Sequential(
-            nn.Linear(4 * num_bands * 2, hidden),
+            nn.Linear(4 * n_fourier_bands * 2, spatial_hidden_dim),
             activation(),
-            nn.Linear(hidden, d_model),
+            nn.Linear(spatial_hidden_dim, embed_dim),
         )
         self.spatial = nn.Sequential(OrderedDict(mlp=mlp))
         self.coordinates_over_bands = Rearrange(
@@ -451,22 +460,22 @@ class _TokenEmbedding(nn.Module):
         freqs = self.freqs.to(device=coordinates.device, dtype=coordinates.dtype)
         # (batch, n_tokens, 4) -> (batch, n_tokens, 4, 1)
         coordinates = self.coordinates_over_bands(coordinates)
-        # -> (batch, n_tokens, 4, num_bands): 2^k pi u_{c,j}
+        # -> (batch, n_tokens, 4, n_fourier_bands): 2^k pi u_{c,j}
         angles = coordinates * freqs
-        # -> (batch, n_tokens, 4 * num_bands)
+        # -> (batch, n_tokens, 4 * n_fourier_bands)
         angles = self.merge_bands(angles)
-        # (batch, n_tokens, window_samples) -> (batch, n_tokens, d_model)
+        # (batch, n_tokens, window_samples) -> (batch, n_tokens, embed_dim)
         signal_embedding = self.signal(signal)
         sine = angles.sin()
         cosine = angles.cos()
-        # -> (batch, n_tokens, 2 * 4 * num_bands): phi(u_c)
+        # -> (batch, n_tokens, 2 * 4 * n_fourier_bands): phi(u_c)
         fourier = torch.cat([sine, cosine], dim=-1)
-        # -> (batch, n_tokens, d_model)
+        # -> (batch, n_tokens, embed_dim)
         spatial_embedding = self.spatial(fourier)
         return signal_embedding + spatial_embedding
 
 
-class _RotaryAttention(TimmAttention):
+class _RotarySelfAttention(TimmAttention):
     """The authors' ``MultiHeadAttention``: timm attention with per-head QK
     LayerNorm, a rotary embedding of the window index and a key padding mask.
 
@@ -474,8 +483,8 @@ class _RotaryAttention(TimmAttention):
     neither per-token positions nor a mask; its ``qkv``/``proj`` are reused.
     """
 
-    def __init__(self, dim, heads, dropout, rope_base, qk_norm):
-        super().__init__(dim, heads, qkv_bias=True, attn_drop=dropout)
+    def __init__(self, embed_dim, num_heads, drop_prob, rope_base, qk_norm):
+        super().__init__(embed_dim, num_heads, qkv_bias=True, attn_drop=drop_prob)
         self.rope_base = float(rope_base)
         self.q_norm = nn.LayerNorm(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = nn.LayerNorm(self.head_dim) if qk_norm else nn.Identity()
@@ -489,7 +498,7 @@ class _RotaryAttention(TimmAttention):
     def forward(  # type: ignore[override]
         self, values: torch.Tensor, positions: torch.Tensor, valid: torch.Tensor
     ) -> torch.Tensor:
-        # (batch, n_tokens, dim) -> 3 x (batch, heads, n_tokens, head_dim)
+        # (batch, n_tokens, embed_dim) -> 3 x (batch, heads, n_tokens, head_dim)
         query, key, value = self._heads(values)
         query = self.q_norm(query)
         key = self.k_norm(key)
@@ -524,7 +533,7 @@ class _RotaryAttention(TimmAttention):
             dropout_p=dropout_p,
             scale=1.0 / math.sqrt(self.head_dim),
         )
-        # (batch, heads, n_tokens, head_dim) -> (batch, n_tokens, dim)
+        # (batch, heads, n_tokens, head_dim) -> (batch, n_tokens, embed_dim)
         output = self.merge_heads(output)
         return self.proj(output)
 
@@ -538,21 +547,23 @@ class _TransformerBlock(nn.Module):
     """
 
     def __init__(
-        self, d_model, n_heads, mlp_hidden, dropout, rope_base, qk_norm, activation
+        self, embed_dim, num_heads, mlp_dim, drop_prob, rope_base, qk_norm, activation
     ):
         super().__init__()
-        self.norm1 = nn.LayerNorm(d_model)
-        self.attn = _RotaryAttention(d_model, n_heads, dropout, rope_base, qk_norm)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.mlp = FeedForwardBlock(
-            d_model, 1, dropout, activation, hidden_features=mlp_hidden
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.attn = _RotarySelfAttention(
+            embed_dim, num_heads, drop_prob, rope_base, qk_norm
         )
-        self.drop = nn.Dropout(dropout)
+        self.norm2 = nn.LayerNorm(embed_dim)
+        self.mlp = FeedForwardBlock(
+            embed_dim, 1, drop_prob, activation, hidden_features=mlp_dim
+        )
+        self.drop = nn.Dropout(drop_prob)
 
     def forward(
         self, values: torch.Tensor, positions: torch.Tensor, valid: torch.Tensor
     ) -> torch.Tensor:
-        # (batch, n_tokens, d_model) -> (batch, n_tokens, d_model)
+        # (batch, n_tokens, embed_dim) -> (batch, n_tokens, embed_dim)
         normed = self.norm1(values)
         attended = self.attn(normed, positions, valid)
         attended = self.drop(attended)
@@ -565,24 +576,25 @@ class _TransformerBlock(nn.Module):
 class _Encoder(nn.Module):
     """The Transformer blocks and a final LayerNorm."""
 
-    def __init__(self, blocks: list[nn.Module], d_model: int):
+    def __init__(self, blocks: list[nn.Module], embed_dim: int):
         super().__init__()
         self.blocks = nn.ModuleList(blocks)
-        self.norm = nn.LayerNorm(d_model)
+        self.norm = nn.LayerNorm(embed_dim)
 
     def forward(
         self, values: torch.Tensor, positions: torch.Tensor, valid: torch.Tensor
     ) -> torch.Tensor:
-        # (batch, n_tokens, d_model) -> (batch, n_tokens, d_model)
+        # (batch, n_tokens, embed_dim) -> (batch, n_tokens, embed_dim)
         for block in self.blocks:
             values = block(values, positions, valid)
         return self.norm(values)
 
 
-def _coordinates(chs_info, pos_center, pos_scale) -> np.ndarray:
-    """``(n_chans, 4)`` :math:`u_c`: ``(loc[:3] - pos_center) / pos_scale``
-    (NaN when unknown or all zero) and 0 for HbO, 1 for HbR, as the official
-    ``chromophore_map``; ``(0, 4)`` without ``chs_info`` or any location."""
+def _coordinates(chs_info, coordinate_center, coordinate_scale) -> np.ndarray:
+    """``(n_chans, 4)`` :math:`u_c`: ``loc[:3]`` minus ``coordinate_center``,
+    divided by ``coordinate_scale`` (NaN when unknown or all zero), and 0 for
+    HbO, 1 for HbR, as the official ``chromophore_map``; ``(0, 4)`` without
+    ``chs_info`` or any location."""
     if chs_info is None:
         return np.zeros((0, 4), np.float32)
     chromophores = fnirs_chromophores_from_chs_info(chs_info)
@@ -594,7 +606,7 @@ def _coordinates(chs_info, pos_center, pos_scale) -> np.ndarray:
     loc[(loc == 0).all(axis=1)] = np.nan  # MNE without a montage: NaN or zeros
     if not np.isfinite(loc).any():  # forward raises unless coordinates are given
         return np.zeros((0, 4), np.float32)
-    center = np.asarray(pos_center, dtype=np.float32)
-    xyz = (loc - center) / float(pos_scale)
+    center = np.asarray(coordinate_center, dtype=np.float32)
+    xyz = (loc - center) / float(coordinate_scale)
     is_hbr = np.equal(chromophores, "hbr")
     return np.c_[xyz, is_hbr].astype(np.float32)

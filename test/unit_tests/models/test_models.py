@@ -6612,7 +6612,7 @@ def test_fnirs_foundation_models_non_divisible_windows_follow_the_reference():
     [
         (GeoNIRS, {"depth": 1, "num_heads": 4, "embed_dim": 64,
                    "pool": "mean_std"}, 60),
-        (MtReNIRS, {"depth": 2, "n_heads": 2, "d_model": 32,
+        (MtReNIRS, {"depth": 2, "num_heads": 2, "embed_dim": 32,
                     "pool": "channel_temporal_mean"}, 100),
     ],
 )
@@ -6764,7 +6764,7 @@ def test_mtrenirs_chromophores_and_valid_window_pooling():
         tokens, _ = model.encode_windows(x)
     torch.testing.assert_close(features, tokens[:, 0].reshape(1, -1), atol=1e-6, rtol=1e-6)
     with pytest.raises(ValueError, match="even head_dim"):
-        MtReNIRS(n_chans=4, n_outputs=2, n_times=100, d_model=12, n_heads=4)
+        MtReNIRS(n_chans=4, n_outputs=2, n_times=100, embed_dim=12, num_heads=4)
 
 
 _FNIRS_WEIGHTS = os.environ.get("BRAINDECODE_FNIRS_WEIGHTS", "")
