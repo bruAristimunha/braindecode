@@ -605,7 +605,7 @@ def _dance_signal_params() -> dict[str, Any]:
 
 def _fnirs_chs_info(n_pairs: int) -> list[dict]:
     """Stacked HbO then HbR channels of ``n_pairs`` source-detector pairs 3 cm
-    apart on a 8 cm ring (metres), with the source and detector in
+    apart on an 8 cm ring (metres), with the source and detector in
     ``loc[3:9]`` as MNE stores them."""
     chs = []
     for kind in ("hbo", "hbr"):
@@ -1403,7 +1403,9 @@ def fnirs_chromophores_from_chs_info(chs_info: Sequence[Dict[str, Any]]) -> list
     return out
 
 
-def fnirs_channel_order(chs_info, channel_order: Optional[str] = None) -> str:
+def fnirs_channel_order(
+    chs_info: Optional[Sequence[Dict[str, Any]]], channel_order: Optional[str] = None
+) -> str:
     """HbO/HbR pair layout of an fNIRS montage: ``"stacked"``
     (``[HbO_1..HbO_C, HbR_1..HbR_C]``) or ``"interleaved"`` (MNE's
     ``[HbO_1, HbR_1, ...]``).
@@ -1434,7 +1436,6 @@ def fnirs_channel_order(chs_info, channel_order: Optional[str] = None) -> str:
         for order, (hbo, hbr) in layouts.items()
         if chromophores[hbo] == ["hbo"] * n
         and chromophores[hbr] == ["hbr"] * n
-        and len(chs_info) == 2 * n
         and names[hbo] == names[hbr]
     ]
     if not found:
