@@ -35,90 +35,67 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
 
     GeoNIRS is "a geometry-aware pretraining framework that uses the physical
     locations of source-detector pairs as a shared spatial reference across
-    heterogeneous probe layouts. GeoNIRS compresses variable-size channel sets
-    into a fixed-size latent representation" :footcite:`li2026geonirs`. This
-    class is its encoder with a linear head; the cross-chromophore
-    reconstruction decoders of pretraining are not part of it.
+    heterogeneous probe layouts" :footcite:`li2026geonirs`. Separate HbO and
+    HbR temporal Transformers encode patches of :math:`S` samples of each
+    channel. A geometry encoder embeds each pair's midpoint and
+    source-detector vector, and :math:`M` learnable latent queries attend over
+    the channels (the keys carry the geometry; HbO and HbR share the attention
+    weights), compressing any montage into a fixed
+    :math:`2 \times M \times P \times F` representation. This class is that
+    encoder with a linear head, without the pretraining decoders.
 
-    **Temporal and geometric representations.** The paired chromophore
-    signals are :math:`X^O, X^R \in \mathbb{R}^{C \times T}`. "Along the
-    temporal dimension, each channel is divided into :math:`P` non-overlapping
-    patches, each containing :math:`S` samples. Every patch is projected into
-    a :math:`D`-dimensional token and augmented with a learnable temporal
-    positional embedding. Separate HbO and HbR temporal encoders then model
-    the token sequence within each physical channel, producing
-    :math:`H^O, H^R \in \mathbb{R}^{C \times P \times D}`." Each channel is
-    represented by the six-dimensional geometry vector
-    :math:`g_c = [\mathrm{mid}_c, \Delta_c]`, with
-    :math:`\mathrm{mid}_c = (s_c + d_c) / 2` and :math:`\Delta_c = d_c - s_c`
-    for its source :math:`s_c` and detector :math:`d_c`, centred on the montage
-    and divided by "a fixed reference scale of 25.46 mm"; a geometry encoder
-    (an MLP and one Transformer layer) maps it to :math:`G`.
+    .. rubric:: How braindecode maps it
 
-    **Geometry-aware channel compression.** GeoNIRS introduces ":math:`M`
-    learnable latent queries, denoted by :math:`L \in \mathbb{R}^{M \times D}`.
-    For the :math:`p`-th temporal patch, the paired HbO and HbR
-    representations are first fused as
-    :math:`\bar{H}_p = \frac{1}{2}(H^O_{:,p} + H^R_{:,p})`", and
+    - **Input.** ``(batch, 2C, n_times)`` paired HbO/HbR channels, stacked or
+      interleaved (the MNE layout); ``channel_order=None`` reads the layout
+      from ``chs_info``. Non-finite samples are invalid; invalid pairs and
+      patches are left out of every attention, and ``ch_mask`` marks padding.
+    - **Geometry.** Source and detector positions from ``chs_info``
+      (``loc[3:9]``), centred on the montage and divided by 25.46 mm, as in
+      the paper's downstream evaluation. The ``geometry`` argument of
+      :meth:`encode` and ``forward`` replaces them.
+    - **Left out:** the pretraining decoders, the head's training-set feature
+      standardization (left to the caller) and LoRA. **Added:**
+      ``pool="mean_std"``, ``on_non_divisible="pad"``/``"crop"`` and ``ch_mask``.
+    - **Names.** Arguments carry the authors' ``model_config`` keys
+      (``dropout`` is ``drop_prob``). The state-dict keys are the checkpoints'
+      own, so they load with ``strict=True`` and no ``mapping``.
 
-    .. math::
+    .. rubric:: Variants
 
-        Q = W_Q \mathrm{LN}(L), \quad
-        K_p = W_K \mathrm{LN}(\bar{H}_p + G), \quad
-        A_p = \mathrm{softmax}\left(\frac{Q K_p^\top}{\sqrt{d_h}}\right).
+    Both released backbones use :math:`M = 16` and :math:`S = 10` (paper
+    Table 6); the defaults build GeoNIRS-Base.
 
-    "Invalid channels are masked before the softmax operation. HbO and HbR
-    share the same attention weights but retain separate value
-    representations": :math:`Z^s_p = A_p W_V \mathrm{LN}(H^s_{:,p})`,
-    :math:`s \in \{O, R\}`. "After an output projection and a feed-forward
-    block", a chromophore-specific residual projection maps the feature
-    dimension from :math:`D` to :math:`F`, giving
-    :math:`Z^O, Z^R \in \mathbb{R}^{M \times P \times F}`.
-
-    **Downstream adaptation.** The representations of both chromophores are
-    "passed to a task-specific prediction head"; in the authors' benchmark,
-    :math:`Z` "is flattened, standardized using training-set statistics,
-    followed by dropout (:math:`p = 0.1`) and a single linear classification
-    layer". Here ``head_dropout`` and ``final_layer`` are that head; the
-    standardization is left to the caller.
-
-    **Input.** Paired :math:`\Delta\text{HbO}`/:math:`\Delta\text{HbR}`
-    channels, ``(batch, n_chans, n_times)``. The geometry comes from
-    ``chs_info`` (source and detector in ``loc[3:9]``, metres) or the
-    ``geometry`` argument of :meth:`encode` and ``forward``; as in the
-    reference, a pair without source/detector locations gets a zero geometry
-    and is left out of the montage centre. NaN samples are invalid; a patch
-    with too few valid samples is left out of every attention.
-
-    :meth:`load_state_dict` takes the official GeoNIRS-Base/Large checkpoints
-    as released. The paper preprocesses every dataset the same way: optical
-    density, quality control, the modified Beer-Lambert law (PPF 6.0, umol/L),
-    resampling to 5 Hz, and "HbO and HbR are standardized separately for each
-    recording" with "a single recording-level mean and standard deviation
-    estimated from all valid channels and valid time points"; pretraining
-    windows are 30 s (150 samples, 15 patches of 2 s). The 15-row temporal
-    embedding of the checkpoints therefore loads only for ``n_times`` up to
-    150.
+    =====================================  =====================  ======================
+    Component                              GeoNIRS-Base           GeoNIRS-Large
+    =====================================  =====================  ======================
+    Pretraining corpus                     8 datasets, 383.30 h   22 datasets, 827.04 h
+    ``embedding_dim`` (:math:`D`)          192                    384
+    ``temporal_layers`` / ``num_heads``    4 / 8                  6 / 12
+    ``output_feature_dim`` (:math:`F`)     64                     128
+    Parameters, checkpoint with decoders   6,511,214              30,146,414
+    Parameters, this class (no head)       4,443,462              24,394,310
+    Released checkpoint                    ``geonirs_base.pt``    ``geonirs_large.pt``
+    =====================================  =====================  ======================
 
     Parameters
     ----------
     patch_samples : int, default=10
-        :math:`S`, samples per temporal patch (2 s at 5 Hz).
+        :math:`S`, samples per patch: 2 s at 5 Hz, as in both checkpoints.
     max_patches : int, default=15
-        Rows of the learnable temporal positional embedding, raised to the
-        patch count of ``n_times``.
+        Rows of the temporal positional embedding (30 s pretraining windows),
+        raised to the patch count of ``n_times``; 15 loads the checkpoints.
     on_non_divisible : {"error", "pad", "crop"}, default="error"
-        A ``n_times`` that is not a multiple of ``patch_samples`` is refused,
-        as by the reference, zero-padded or cropped.
+        For ``n_times`` not a multiple of ``patch_samples``: refuse, as the
+        reference does, zero-pad or crop.
     embedding_dim : int, default=192
-        :math:`D`, width of the tokens (GeoNIRS-Large: 384).
+        :math:`D`, token width.
     num_heads : int, default=8
-        Heads of the temporal Transformers (GeoNIRS-Large: 12).
+        Heads of the temporal Transformers.
     temporal_layers : int, default=4
-        Layers of each temporal Transformer (GeoNIRS-Large: 6).
+        Layers of each temporal Transformer.
     mlp_ratio : float, default=4.0
-        Feed-forward width of the temporal Transformers, relative to
-        ``embedding_dim``.
+        Feed-forward width of the temporal Transformers, relative to :math:`D`.
     geometry_hidden_dim : int or None, default=None
         Hidden width of the geometry MLP; ``None`` is ``embedding_dim``.
     geometry_heads : int or None, default=None
@@ -126,30 +103,75 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
     num_latent_sources : int, default=16
         :math:`M`, learnable latent queries.
     spatial_heads : int or None, default=None
-        Heads of the geometry-aware channel attention (:math:`d_h` is
-        ``embedding_dim // spatial_heads``); ``None`` is ``num_heads``.
+        Heads of the channel-compression attention; ``None`` is ``num_heads``.
     output_feature_dim : int, default=64
-        :math:`F`, width of each latent token after the residual projection
-        (GeoNIRS-Large: 128).
+        :math:`F`, width of each latent token after the chromophore projection.
     use_channel_geometry : bool, default=True
-        Add :math:`G` to the keys; ``False`` drops the geometry encoder (the
-        paper's "w/o Geometry" variant).
+        Add the geometry embedding to the keys; ``False`` drops that encoder.
     pool : {"flatten", "mean_std"}, default="flatten"
-        Readout of the ``(batch, 2, M, P, F)`` representation: all of it, or
-        the mean and standard deviation of :math:`[Z^O \| Z^R]` over the valid
-        patches (the features of the reference ``mean_std_linear`` head, whose
-        LayerNorm is left to the caller).
+        Readout: all features (the paper's ``flatten_linear`` head), or their
+        mean and standard deviation over valid patches (``mean_std_linear``).
     channel_order : {"stacked", "interleaved"} or None, default=None
-        Input layout, ``[HbO_1..HbO_C, HbR_1..HbR_C]`` or ``[HbO_1, HbR_1, ...]``;
-        ``None`` reads it from ``chs_info``.
+        ``[HbO_1..HbO_C, HbR_1..HbR_C]`` or ``[HbO_1, HbR_1, ...]``; ``None``
+        reads it from ``chs_info`` (stacked without it).
     drop_prob : float, default=0.1
-        Dropout in the network.
+        Dropout in the network (the reference's ``dropout``).
     head_drop_prob : float, default=0.1
-        Dropout before ``final_layer``.
+        Dropout before ``final_layer``, the paper's :math:`p = 0.1`.
     minimum_patch_valid_fraction : float, default=0.8
-        A patch is valid when "at least 80% of its time points are valid".
+        A patch is valid when at least this fraction of its samples is finite.
     activation : type[nn.Module], default=nn.GELU
-        Activation of the network.
+        Activation of the network, as in the reference.
+
+    Notes
+    -----
+    **Protocol** (paper Appendix B, Tables 7-9). Pretraining: optical density,
+    quality control, modified Beer-Lambert law (PPF 6.0), 5 Hz, HbO and HbR
+    z-scored separately per recording, no band-pass, 30 s windows; AdamW with
+    cosine decay, Base at 1e-4 for 150 epochs, Large at 3e-4 for 40.
+    Downstream: eight held-out binary tasks, a fixed channel set per dataset,
+    12 s windows (60 samples) for six tasks and 10 s for two; subject-level
+    five-fold cross-validation with seeds 810 and 811 (mean of 10 cells);
+    AdamW, 30 epochs, batch 16, class-weighted cross-entropy, selection on
+    validation balanced accuracy; linear probing trains the head at 1e-4.
+    Balanced accuracy is the main metric, macro-F1 and AUROC the others.
+
+    **Replication.** Linear probe of the frozen GeoNIRS-Base on DS42 (action
+    mode, ds005935) and DS19 (pain intensity, ds005777), 60-sample windows,
+    folds 1-5, seeds 810 and 811. "Authors' pipeline" is their repository at
+    81f8995 run end to end; "Port" is this class with a re-implementation of
+    their probe.
+
+    ===============  ========  ======  =================  ======
+    Task             Metric    Paper   Authors' pipeline  Port
+    ===============  ========  ======  =================  ======
+    DS42             macro-F1  0.7018  0.7000             0.7039
+    DS42             AUROC     0.7840  0.7840             0.7840
+    DS19             macro-F1  0.5598  0.5599             0.5304
+    DS19             AUROC     0.5683  0.5687             0.5549
+    ===============  ========  ======  =================  ======
+
+    Both pipelines build the same windows (1628 and 1190), on which this class
+    gives the authors' encoder features (max-abs difference 0.0, Base and
+    Large, eval mode). On the authors' features, with their row order and their
+    head-initialisation order, the port's probe gives DS19 macro-F1 0.5599. In
+    training mode the dropout draws differ from the reference.
+
+    **Pretrained weights.** ``geonirs_base.pt`` and ``geonirs_large.pt`` are in
+    the ``checkpoint/`` folder (Git LFS) of `GeoNIRS/GeoNIRS@81f8995
+    <https://github.com/GeoNIRS/GeoNIRS/tree/81f8995e5c3aa6b70e55812b194fc04e4e7ea5b7/checkpoint>`_.
+    :meth:`load_state_dict` takes the file as released and drops the decoders.
+    They expect 5 Hz signals preprocessed as above and load for ``n_times`` up
+    to 150; for Large, pass the arguments of its column in the table.
+
+    .. code-block:: python
+
+        import torch
+        from braindecode.models import GeoNIRS
+
+        payload = torch.load("geonirs_base.pt", map_location="cpu", weights_only=True)
+        model = GeoNIRS(chs_info=raw.info["chs"], n_outputs=2, n_times=60, sfreq=5.0)
+        model.load_state_dict(payload)
 
     References
     ----------
