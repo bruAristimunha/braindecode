@@ -18,49 +18,97 @@ from braindecode.modules import DepthwiseConv2d
 
 
 class FNIRSNet(EEGModuleMixin, nn.Module, license="apache-2.0"):
-    r"""fNIRSNet from Wang et al. (2023) :footcite:`wang2023fnirsnet`.
+    r"""fNIRSNet from Wang et al. (2023).
 
     :bdg-success:`Convolution`
 
     .. versionadded:: 2.1
 
-    From the paper: "fNIRSNet consists of a delayed hemodynamic response module
-    (DHR Module) and a global module. Specifically, fNIRSNet contains three
-    convolutional layers with different kernel sizes and a fully connected (FC)
-    layer. Delayed hemodynamic response convolutions (DHRConv) extract the
-    channel-level features of delayed hemodynamic responses. Depthwise separable
-    convolutions consisting of depthwise convolutions (DWConv) and pointwise
-    convolutions (PWConv) are used to reduce model parameters. Batch
-    normalization (BN) accelerates network training and improves classification
-    performance. The sigmoid activation function is used for nonlinear
-    activation and alleviates information loss in the first layer. The feature
-    maps are flattened to 1D vectors and then fed into an FC layer."
+    .. figure:: https://braindecode.org/dev/_static/model/fnirsnet.png
+       :align: center
+       :alt: fNIRSNet architecture
 
-    The input is the paper's fNIRS tensor, :math:`C` rows (``n_chans``: the HbO
-    and HbR signals of every fNIRS channel) by :math:`S` sampling points
-    (``n_times``). The DHR module is ``conv1`` (DHRConv, kernel
-    :math:`1 \times S`) and ``bn1``; the global module is ``conv2.depth_conv``
-    (DWConv, kernel :math:`C \times 1`), ``conv2.point_conv`` (PWConv,
-    :math:`1 \times 1`) and ``bn2``; ``final_layer`` is the FC layer. The
-    parameter names are the authors', and ``mapping`` loads their ``fc.*``
-    weights, so their ``state_dict`` loads with ``strict=True``.
+       Fig. 2 of Wang et al. (2023), CC BY 4.0: "(a) Overview architecture of
+       fNIRSNet. (b) Schema of receptive fields. [...] (c) Depthwise separable
+       convolution."
 
-    `License <https://github.com/wzhlearning/fNIRSNet/blob/main/LICENSE>`_
+    From the paper :footcite:`wang2023fnirsnet`: "fNIRSNet consists of a
+    delayed hemodynamic response module (DHR Module) and a global module.
+    [...] Delayed hemodynamic response convolutions (DHRConv) extract the
+    channel-level features of delayed hemodynamic responses. Depthwise
+    separable convolutions consisting of depthwise convolutions (DWConv) and
+    pointwise convolutions (PWConv) are used to reduce model parameters."
+
+    The input is the paper's fNIRS tensor of :math:`C` rows (``n_chans``,
+    "twice (two chromophores: HbO and HbR) the number of fNIRS channels") by
+    :math:`S` sampling points (``n_times``). As in Fig. 2(a) and the authors'
+    loaders, the HbO rows come first, then the HbR rows; ``chs_info`` is not
+    read, so keep the row order used in training. The DHRConv kernel spans the
+    window, so the model has no sampling-rate argument (the paper: 3 s at
+    10 Hz, :math:`S = 30`, and at 13.3 Hz, :math:`S = 40`).
+
+    Modules keep the authors' names: ``conv1`` (DHRConv, :math:`1 \times S`),
+    ``bn1``, ``conv2.depth_conv`` (DWConv, :math:`C \times 1`, one filter per
+    DHRConv map), ``conv2.point_conv`` (PWConv, :math:`F_1 \to F_2`), ``bn2``,
+    sigmoid after each BN, and ``final_layer`` (FC). ``mapping`` renames their
+    ``fc.*``, so an authors' ``state_dict`` loads with ``strict=True``; no
+    weights are released. As in their code, the output is logits.
+
+    The paper's two sizes (Section III-D), with the parameter counts of its
+    Table III (this module gives the same counts):
+
+    ===================  =======  ======  ======  ======  ======  ==========
+    Protocol             Dataset  C       S       F1      F2      Parameters
+    ===================  =======  ======  ======  ======  ======  ==========
+    Subject-specific     MA       72      30      4       8       498
+    Subject-specific     UFFT     40      40      4       8       419
+    Subject-independent  MA       72      30      16      32      2,370
+    Subject-independent  UFFT     40      40      16      32      2,051
+    ===================  =======  ======  ======  ======  ======  ==========
+
+    The authors' released ``LOSO_Train.py`` uses :math:`F_1 = 8`,
+    :math:`F_2 = 16`.
 
     Parameters
     ----------
     n_dhr_filters : int, default=4
-        Number of DHRConv filters (:math:`F_1` in the paper, ``num_DHRConv`` in
-        the authors' code).
+        DHRConv filters, :math:`F_1` (``num_DHRConv``). The paper's
+        subject-specific value.
     n_dw_filters : int, default=8
-        Number of filters of the global module (:math:`F_2` in the paper,
-        ``num_DWConv`` in the authors' code).
+        PWConv filters, the width of the global module, :math:`F_2`
+        (``num_DWConv``). The paper's subject-specific value.
     dhr_kernel_length : int or None, default=None
-        Width of the DHRConv kernel (``DHRConv_width``). ``None`` uses
-        :math:`S` = ``n_times``: "the width of this kernel equals the number of
-        input sampling points" (the paper's Guideline 1).
+        DHRConv width :math:`k` (``DHRConv_width``). ``None`` uses :math:`S`,
+        the paper's Guideline 1; a shorter kernel (not in the paper) gives
+        :math:`F_2 (S - k + 1)` features to the FC layer.
     activation : type[nn.Module], default=nn.Sigmoid
-        Activation after each batch normalization (sigmoid in the paper).
+        Activation after each BN (``act``). Guideline 3: activations "with
+        saturated negative values" (sigmoid, tanh, ELU) work better.
+
+    Notes
+    -----
+    Protocol (paper Section III; details from the authors' code): MA
+    :footcite:`shin2017openaccess` (2 classes, 29 subjects, 10 Hz) and UFFT
+    :footcite:`bak2019ufft` (3 classes, 30 subjects, 13.3 Hz); band-pass
+    0.01-0.1 Hz (third-order Butterworth, zero-phase), baseline correction,
+    3 s windows with a 1 s step, each window z-scored. Subject-specific:
+    5-fold CV over contiguous trial blocks, AdamW (lr 0.001), label smoothing
+    0.1, batch 64, 120 epochs, lr / 10 at epochs 60 and 90. Subject-
+    independent: leave-one-subject-out, cosine lr over 30 epochs. Test
+    metrics of the last epoch, averaged over folds and subjects.
+
+    Replication on UFFT, accuracy / macro-F1 in %, the authors' training loops
+    around this port and around their ``fNIRSNet`` (seeds 0-2; LOSO with
+    :math:`F_1 = 8`, :math:`F_2 = 16`):
+
+    ===================  ===============  =============  =============
+    UFFT                 Paper, Table II  This port      Authors' code
+    ===================  ===============  =============  =============
+    Subject-specific     68.67 / 68.02    67.68 / 66.83  67.68 / 66.83
+    Subject-independent  64.43 / 63.57    64.52 / 63.67  64.51 / 63.67
+    ===================  ===============  =============  =============
+
+    `License <https://github.com/wzhlearning/fNIRSNet/blob/main/LICENSE>`_
 
     References
     ----------
