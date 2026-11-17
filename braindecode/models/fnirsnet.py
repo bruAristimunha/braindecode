@@ -28,9 +28,10 @@ class FNIRSNet(EEGModuleMixin, nn.Module, license="apache-2.0"):
        :align: center
        :alt: fNIRSNet architecture
 
-       Fig. 2 of Wang et al. (2023), CC BY 4.0, cropped: "(a) Overview architecture of
-       fNIRSNet. (b) Schema of receptive fields. [...] (c) Depthwise separable
-       convolution."
+       Fig. 2 of Wang et al. (2023), cropped
+       (`CC BY 4.0 <https://creativecommons.org/licenses/by/4.0/>`_): "(a)
+       Overview architecture of fNIRSNet. (b) Schema of receptive fields.
+       [...] (c) Depthwise separable convolution."
 
     From the paper :footcite:`wang2023fnirsnet`: "fNIRSNet consists of a
     delayed hemodynamic response module (DHR Module) and a global module.
@@ -95,8 +96,8 @@ class FNIRSNet(EEGModuleMixin, nn.Module, license="apache-2.0"):
     0.01-0.1 Hz (third-order Butterworth, zero-phase), baseline correction,
     3 s windows with a 1 s step, each window z-scored. Subject-specific:
     5-fold CV over contiguous trial blocks, AdamW (lr 0.001), label smoothing
-    0.1, batch 64, 120 epochs, lr / 10 at epochs 60 and 90. Subject-
-    independent: leave-one-subject-out, cosine lr over 30 epochs. Test
+    0.1, batch 64, 120 epochs, lr / 10 at epochs 60 and 90.
+    Subject-independent: leave-one-subject-out, cosine lr over 30 epochs. Test
     metrics of the last epoch, averaged over folds and subjects.
 
     Replication on UFFT, accuracy / macro-F1 in %, the authors' training loops
@@ -111,7 +112,7 @@ class FNIRSNet(EEGModuleMixin, nn.Module, license="apache-2.0"):
     Subject-independent  64.43 / 63.57    64.52 / 63.67  64.51 / 63.67
     ===================  ===============  =============  =============
 
-    `License <https://github.com/wzhlearning/fNIRSNet/blob/11d9dad/LICENSE>`_
+    `License <https://github.com/wzhlearning/fNIRSNet/blob/11d9dad96308c65c039a0978b7eaf8a845065421/LICENSE>`_
 
     References
     ----------

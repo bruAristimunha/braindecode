@@ -6462,10 +6462,12 @@ def test_fnirs_task_models_options_and_features_feed_head(model_cls, kwargs):
 
 class _AuthorsFNIRSNet(torch.nn.Module):
     """The reference: fNIRSNet.py of wzhlearning/fNIRSNet@11d9dad (Apache-2.0),
-    transcribed with the same layers, state-dict keys and forward."""
+    transcribed with the same layers, state-dict keys and forward. The authors'
+    FC takes ``num_DWConv`` inputs (full-width DHRConv); ``n_features`` widens it
+    for a shorter kernel, as the port does."""
 
     def __init__(self, num_class, DHRConv_width=40, DWConv_height=40,
-                 num_DHRConv=4, num_DWConv=8):
+                 num_DHRConv=4, num_DWConv=8, n_features=None):
         super().__init__()
         self.conv1 = torch.nn.Conv2d(1, num_DHRConv, kernel_size=(1, DHRConv_width))
         self.bn1 = torch.nn.BatchNorm2d(num_DHRConv)
@@ -6476,7 +6478,7 @@ class _AuthorsFNIRSNet(torch.nn.Module):
         )
         self.conv2.point_conv = torch.nn.Conv2d(num_DHRConv, num_DWConv, kernel_size=1)
         self.bn2 = torch.nn.BatchNorm2d(num_DWConv)
-        self.fc = torch.nn.Linear(num_DWConv, num_class)
+        self.fc = torch.nn.Linear(n_features or num_DWConv, num_class)
         self.act = torch.nn.Sigmoid()
 
     def forward(self, x):
@@ -6486,13 +6488,19 @@ class _AuthorsFNIRSNet(torch.nn.Module):
         return self.fc(x)
 
 
-@pytest.mark.parametrize("n_chans, n_times, f1, f2", [(40, 40, 4, 8), (72, 30, 16, 32)])
-def test_fnirsnet_matches_the_authors_module(n_chans, n_times, f1, f2):
-    """The authors' state dict loads strictly through ``mapping``; outputs,
-    gradients and BatchNorm statistics then equal the authors' module in eval
-    and train mode, also after optimizer steps."""
+@pytest.mark.parametrize(
+    "n_chans, n_times, f1, f2, kernel",
+    [(40, 40, 4, 8, None), (72, 30, 16, 32, None), (40, 40, 4, 8, 10)],
+)
+def test_fnirsnet_matches_the_authors_module(n_chans, n_times, f1, f2, kernel):
+    """The authors' state dict loads strictly through ``mapping``; the logits and
+    ``final_layer(features)`` equal the authors' module in eval and train mode,
+    and the parameters and BatchNorm statistics stay equal over AdamW steps."""
+    width = kernel or n_times
     torch.manual_seed(0)
-    reference = _AuthorsFNIRSNet(3, n_times, n_chans, f1, f2)
+    reference = _AuthorsFNIRSNet(
+        3, width, n_chans, f1, f2, n_features=f2 * (n_times - width + 1)
+    )
     with torch.no_grad():  # non-trivial BatchNorm statistics and affine terms
         for bn in (reference.bn1, reference.bn2):
             bn.running_mean.uniform_(-1, 1)
@@ -6500,14 +6508,18 @@ def test_fnirsnet_matches_the_authors_module(n_chans, n_times, f1, f2):
             bn.weight.uniform_(0.5, 2)
             bn.bias.uniform_(-1, 1)
     model = FNIRSNet(
-        n_chans=n_chans, n_outputs=3, n_times=n_times, n_dhr_filters=f1, n_pw_filters=f2
+        n_chans=n_chans, n_outputs=3, n_times=n_times, n_dhr_filters=f1,
+        n_pw_filters=f2, dhr_kernel_length=kernel,
     )
     model.load_state_dict(reference.state_dict(), strict=True)
     x = torch.randn(6, n_chans, n_times)
     for training in (False, True):
         reference.train(training)
         model.train(training)
-        torch.testing.assert_close(model(x), reference(x.unsqueeze(1)), rtol=0, atol=0)
+        expected = reference(x.unsqueeze(1))
+        torch.testing.assert_close(model(x), expected, rtol=0, atol=0)
+        features = model(x, return_features=True)["features"]
+        torch.testing.assert_close(model.final_layer(features), expected, rtol=0, atol=0)
     optimizers = [torch.optim.AdamW(m.parameters(), lr=1e-2) for m in (reference, model)]
     y = torch.tensor([0, 1, 2, 0, 1, 2])
     for _ in range(3):
