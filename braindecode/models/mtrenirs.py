@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import math
 from collections import OrderedDict
-from typing import Literal
+from typing import List, Literal, Optional
 
 import numpy as np
 import torch
 import torch.nn as nn
+from einops.layers.torch import Rearrange
 
 from braindecode.functional import (
     apply_rotary,
@@ -191,6 +192,9 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
                 f"d_model ({d_model}) must be divisible by n_heads ({n_heads}) "
                 "with an even head_dim for rotary position embeddings."
             )
+        pools = ("temporal_mean", "channel_temporal_mean", "flatten")
+        if pool not in pools:
+            raise ValueError(f"pool must be one of {pools}, got {pool!r}.")
         _check_on_non_divisible(on_non_divisible)
         self.window_samples = window_samples
         self.pool = pool
@@ -199,12 +203,44 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
         self.embed = _TokenEmbedding(
             window_samples, d_model, fourier_num_bands, spatial_mlp_hidden, activation
         )
-        block = (n_heads, mlp_hidden, float(drop_prob), rope_base, qk_norm, activation)
-        self.encoder = _Encoder(d_model, depth, *block)
+        dropout = float(drop_prob)
+        blocks = [
+            _TransformerBlock(
+                d_model, n_heads, mlp_hidden, dropout, rope_base, qk_norm, activation
+            )
+            for _ in range(depth)
+        ]
+        self.encoder = _Encoder(blocks, d_model)
         self.register_buffer(
             "default_coordinates",
             torch.from_numpy(_coordinates(self._chs_info, pos_center, pos_scale)),
             persistent=False,
+        )
+        self.split_windows = Rearrange(
+            "batch chans (windows samples) -> batch windows chans samples",
+            samples=window_samples,
+        )
+        self.chan_over_coordinates = Rearrange("batch chans -> batch chans 1")
+        self.chan_over_windows = Rearrange("batch chans -> batch 1 chans")
+        self.merge_tokens = Rearrange(
+            "batch windows chans samples -> batch (windows chans) samples"
+        )
+        self.merge_token_mask = Rearrange(
+            "batch windows chans -> batch (windows chans)"
+        )
+        self.coordinates_over_windows = Rearrange(
+            "batch chans coords -> batch 1 chans coords"
+        )
+        self.merge_coordinates = Rearrange(
+            "batch windows chans coords -> batch (windows chans) coords"
+        )
+        self.token_over_features = Rearrange("batch tokens -> batch tokens 1")
+        self.valid_over_features = Rearrange(
+            "batch windows chans -> batch windows chans 1"
+        )
+        self.flatten_channels = Rearrange("batch chans dim -> batch (chans dim)")
+        self.flatten_tokens = Rearrange(
+            "batch windows chans dim -> batch (windows chans dim)"
         )
         self.feature_dim = {
             "temporal_mean": self.n_chans * d_model,
@@ -216,55 +252,82 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
     def encode_windows(
         self,
         x: torch.Tensor,
-        coordinates: torch.Tensor | None = None,
-        ch_mask: torch.Tensor | None = None,
+        coordinates: Optional[torch.Tensor] = None,
+        ch_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """``(batch, n_chans, n_times)`` -> tokens ``(batch, n_windows, n_chans,
         d_model)`` and their validity ``(batch, n_windows, n_chans)``.
-        ``coordinates`` is ``(n_chans, 4)`` or ``(batch, n_chans, 4)``; NaN
-        positions mark channels without a location."""
+        ``coordinates`` is ``(n_chans, 4)`` or ``(batch, n_chans, 4)``
+        (:math:`u_c`, positions already standardized); NaN positions mark
+        channels without a location."""
         batch_size, n_chans, _ = x.shape
-        coord = self.default_coordinates if coordinates is None else coordinates
-        if coord.numel() == 0:
-            raise ValueError(
-                "MtReNIRS needs channel positions and chromophores: chs_info "
-                "with channel locations (loc[:3]) or the coordinates argument."
-            )
-        if coordinates is None and coord.shape[0] != n_chans:
-            raise ValueError(
-                "x and chs_info have different channel counts: pass the "
-                "coordinates of the channels of x."
-            )
+        if coordinates is None:
+            coord = self.default_coordinates
+            if coord.numel() == 0:
+                raise ValueError(
+                    "MtReNIRS needs channel positions and chromophores: chs_info "
+                    "with channel locations (loc[:3]) or the coordinates argument."
+                )
+            if coord.shape[0] != n_chans:
+                raise ValueError(
+                    "x and chs_info have different channel counts: pass the "
+                    "coordinates of the channels of x."
+                )
+        else:
+            coord = coordinates
+            if coord.shape[-2] != n_chans:
+                raise ValueError(
+                    "coordinates and x have different channel counts: pass one "
+                    "row per channel of x."
+                )
+        # (batch, n_chans, n_times) -> (batch, n_chans, n_windows * window_samples)
         x = pad_or_crop_to_patches(x, self.window_samples, self.on_non_divisible)
-        n_win = x.shape[-1] // self.window_samples
-        # (B, C, T) -> (B, W, C, window_samples)
-        windows = x.unflatten(-1, [n_win, self.window_samples]).transpose(1, 2)
+        # -> (batch, n_windows, n_chans, window_samples): x_{c,t}
+        windows = self.split_windows(x)
+        n_windows = windows.shape[1]
         finite = torch.isfinite(windows)
-        valid = finite.all(dim=-1)  # (B, W, C): a NaN masks its window
+        # (batch, n_windows, n_chans): a NaN masks its window
+        valid = finite.all(dim=-1)
         coord = coord.to(device=x.device, dtype=windows.dtype)
-        if coord.ndim == 2:
-            coord = coord.unsqueeze(0).expand(batch_size, -1, -1)
-        # (B, C): a channel without a location is masked, at position 0
-        located = torch.isfinite(coord[..., :3]).all(dim=-1)
-        coord = torch.where(located.unsqueeze(-1), coord, torch.zeros_like(coord))
-        valid = valid & located.unsqueeze(1)
+        # (n_chans, 4) or (batch, n_chans, 4) -> (batch, n_chans, 4)
+        coord = coord.expand(batch_size, -1, -1)
+        positions = coord[..., :3]
+        positions_finite = torch.isfinite(positions)
+        # (batch, n_chans): a channel without a location is masked, at position 0
+        located = positions_finite.all(dim=-1)
+        located_over_coordinates = self.chan_over_coordinates(located)
+        coord_zeros = torch.zeros_like(coord)
+        coord = torch.where(located_over_coordinates, coord, coord_zeros)
+        # (batch, n_chans) -> (batch, 1, n_chans)
+        located_over_windows = self.chan_over_windows(located)
+        valid = valid & located_over_windows
         if ch_mask is not None:
-            valid = valid & ch_mask.unsqueeze(1).to(torch.bool)
-        valid_tokens = valid.reshape(batch_size, n_win * n_chans)
-        tokens = torch.where(finite, windows, torch.zeros_like(windows)).reshape(
-            batch_size, n_win * n_chans, self.window_samples
-        )
-        # (B, C, 4) -> (B, W*C, 4); the rotary position of a token is its window
-        coord_tokens = coord.unsqueeze(1).expand(-1, n_win, -1, -1).flatten(1, 2)
-        window_indices = (
-            torch.arange(n_win, device=x.device)
-            .repeat_interleave(n_chans)
-            .expand(batch_size, -1)
-        )
-        embedded = self.embed(tokens, coord_tokens)  # (B, W*C, d_model)
+            ch_mask = self.chan_over_windows(ch_mask)
+            ch_mask = ch_mask.to(torch.bool)
+            valid = valid & ch_mask
+        # (batch, n_windows, n_chans) -> (batch, n_windows * n_chans)
+        valid_tokens = self.merge_token_mask(valid)
+        window_zeros = torch.zeros_like(windows)
+        tokens = torch.where(finite, windows, window_zeros)
+        # (batch, n_windows, n_chans, window_samples) -> (batch, n_windows * n_chans, window_samples)
+        tokens = self.merge_tokens(tokens)
+        # (batch, n_chans, 4) -> (batch, n_windows * n_chans, 4): u_c of every token
+        coord_tokens = self.coordinates_over_windows(coord)
+        coord_tokens = coord_tokens.expand(-1, n_windows, -1, -1)
+        coord_tokens = self.merge_coordinates(coord_tokens)
+        # (batch, n_windows * n_chans): the RoPE position of a token is its window t
+        window_indices = torch.arange(n_windows, device=x.device)
+        window_indices = window_indices.repeat_interleave(n_chans)
+        window_indices = window_indices.expand(batch_size, -1)
+        # -> (batch, n_windows * n_chans, d_model): z_{c,t}
+        embedded = self.embed(tokens, coord_tokens)
         encoded = self.encoder(embedded, window_indices, valid_tokens)
-        encoded = encoded * valid_tokens.unsqueeze(-1).to(encoded.dtype)
-        return encoded.reshape(batch_size, n_win, n_chans, -1), valid
+        token_weight = self.token_over_features(valid_tokens)
+        token_weight = token_weight.to(encoded.dtype)
+        encoded = encoded * token_weight
+        # (batch, n_windows * n_chans, d_model) -> (batch, n_windows, n_chans, d_model)
+        encoded = encoded.unflatten(1, [n_windows, n_chans])
+        return encoded, valid
 
     def reset_head(self, n_outputs: int) -> None:
         self._set_n_outputs(n_outputs)
@@ -282,8 +345,8 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
         self,
         x: torch.Tensor,
         return_features: bool = False,
-        coordinates: torch.Tensor | None = None,
-        ch_mask: torch.Tensor | None = None,
+        coordinates: Optional[torch.Tensor] = None,
+        ch_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor | dict[str, torch.Tensor | None]:
         """``(batch, n_chans, n_times)`` -> ``(batch, n_outputs)``.
 
@@ -298,22 +361,34 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
                 "ch_mask needs pool='channel_temporal_mean': the other heads "
                 "are tied to the channels."
             )
-        # (B, C, T) -> (B, W, C, D)
+        # (batch, n_chans, n_times) -> (batch, n_windows, n_chans, d_model)
         encoded, valid = self.encode_windows(x, coordinates, ch_mask)
         if self.pool == "flatten":
-            features = encoded.flatten(1)
-        else:  # mean over the valid windows (and channels)
-            dims = [1] if self.pool == "temporal_mean" else [1, 2]
-            valid_f = valid.unsqueeze(-1).to(encoded.dtype)
-            denom = valid_f.sum(dim=dims).clamp_min(1.0)
-            features = ((encoded * valid_f).sum(dim=dims) / denom).flatten(1)
+            # -> (batch, n_windows * n_chans * d_model)
+            features = self.flatten_tokens(encoded)
+        else:
+            # mean over the valid windows (and channels)
+            dims: List[int] = [1] if self.pool == "temporal_mean" else [1, 2]
+            # (batch, n_windows, n_chans) -> (batch, n_windows, n_chans, 1)
+            weight = self.valid_over_features(valid)
+            weight = weight.to(encoded.dtype)
+            count = weight.sum(dim=dims)
+            count = count.clamp_min(1.0)
+            weighted = encoded * weight
+            total = weighted.sum(dim=dims)
+            # -> (batch, n_chans, d_model) or (batch, d_model)
+            features = total / count
+            if self.pool == "temporal_mean":
+                # (batch, n_chans, d_model) -> (batch, n_chans * d_model)
+                features = self.flatten_channels(features)
         if return_features:
             return {"features": features, "cls_token": None}
         return self.final_layer(features)
 
 
 class _TokenEmbedding(nn.Module):
-    """``signal(window) + spatial(Fourier features of (x, y, z, chromophore))``."""
+    """Signal embedding of the window plus the spatio-chromophore embedding
+    (an MLP of the Fourier features of :math:`u_c`)."""
 
     def __init__(self, window_samples, d_model, num_bands, hidden, activation):
         super().__init__()
@@ -321,6 +396,7 @@ class _TokenEmbedding(nn.Module):
         self.signal = nn.Sequential(
             OrderedDict(proj=nn.Linear(window_samples, d_model))
         )
+        # 2^k pi, k = 0, ..., num_bands - 1
         freqs = (2.0 ** torch.arange(num_bands).float()) * torch.pi
         self.register_buffer("freqs", freqs, persistent=False)
         mlp = nn.Sequential(
@@ -329,17 +405,33 @@ class _TokenEmbedding(nn.Module):
             nn.Linear(hidden, d_model),
         )
         self.spatial = nn.Sequential(OrderedDict(mlp=mlp))
+        self.coordinates_over_bands = Rearrange(
+            "batch tokens coords -> batch tokens coords 1"
+        )
+        self.merge_bands = Rearrange(
+            "batch tokens coords bands -> batch tokens (coords bands)"
+        )
 
     def forward(self, signal: torch.Tensor, coordinates: torch.Tensor) -> torch.Tensor:
         freqs = self.freqs.to(device=coordinates.device, dtype=coordinates.dtype)
-        # (B, N, 4) -> (B, N, 4 * num_bands)
-        proj = (coordinates.unsqueeze(-1) * freqs).flatten(start_dim=-2)
-        return self.signal(signal) + self.spatial(
-            torch.cat([proj.sin(), proj.cos()], dim=-1)
-        )
+        # (batch, n_tokens, 4) -> (batch, n_tokens, 4, 1)
+        coordinates = self.coordinates_over_bands(coordinates)
+        # -> (batch, n_tokens, 4, num_bands): 2^k pi u_{c,j}
+        angles = coordinates * freqs
+        # -> (batch, n_tokens, 4 * num_bands)
+        angles = self.merge_bands(angles)
+        # (batch, n_tokens, window_samples) -> (batch, n_tokens, d_model)
+        signal_embedding = self.signal(signal)
+        sine = angles.sin()
+        cosine = angles.cos()
+        # -> (batch, n_tokens, 2 * 4 * num_bands): phi(u_c)
+        fourier = torch.cat([sine, cosine], dim=-1)
+        # -> (batch, n_tokens, d_model)
+        spatial_embedding = self.spatial(fourier)
+        return signal_embedding + spatial_embedding
 
 
-class _MultiHeadAttention(TimmAttention):
+class _RotaryAttention(TimmAttention):
     """The authors' ``MultiHeadAttention``: timm attention with per-head QK
     LayerNorm, a rotary embedding of the window index and a key padding mask.
 
@@ -352,39 +444,57 @@ class _MultiHeadAttention(TimmAttention):
         self.rope_base = float(rope_base)
         self.q_norm = nn.LayerNorm(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = nn.LayerNorm(self.head_dim) if qk_norm else nn.Identity()
+        self.angles_over_heads = Rearrange("batch tokens dim -> batch 1 tokens dim")
+        self.keys_over_queries = Rearrange("batch tokens -> batch 1 1 tokens")
+        self.merge_heads = Rearrange(
+            "batch heads tokens dim -> batch tokens (heads dim)"
+        )
 
     # takes positions and valid, unlike timm's forward: mypy's override check is off
     def forward(  # type: ignore[override]
         self, values: torch.Tensor, positions: torch.Tensor, valid: torch.Tensor
     ) -> torch.Tensor:
-        # (B, N, D) -> 3 x (B, heads, N, head_dim)
+        # (batch, n_tokens, dim) -> 3 x (batch, heads, n_tokens, head_dim)
         query, key, value = self._heads(values)
-        query, key = self.q_norm(query), self.k_norm(key)
+        query = self.q_norm(query)
+        key = self.k_norm(key)
+        # (head_dim // 2,)
         inv_freq = rotary_frequencies(
             self.head_dim, self.rope_base, positions.device, query.dtype
         )
-        angles = rotary_angles(positions.to(query.dtype), inv_freq, interleaved=False)
-        cosine = angles.cos().unsqueeze(1)
-        sine = angles.sin().unsqueeze(1)
+        positions = positions.to(query.dtype)
+        # (batch, n_tokens) -> (batch, n_tokens, head_dim)
+        angles = rotary_angles(positions, inv_freq, interleaved=False)
+        cosine = angles.cos()
+        sine = angles.sin()
+        # (batch, n_tokens, head_dim) -> (batch, 1, n_tokens, head_dim)
+        cosine = self.angles_over_heads(cosine)
+        sine = self.angles_over_heads(sine)
         query = apply_rotary(query, cosine, sine, interleaved=False)
         key = apply_rotary(key, cosine, sine, interleaved=False)
-        # a sample with no valid token attends to all of them
-        safe = valid | (~valid.any(dim=-1, keepdim=True))
-        bias = torch.zeros_like(safe[:, None, None, :], dtype=query.dtype)
-        bias = bias.masked_fill(~safe[:, None, None, :], float("-inf"))
+        # (batch, n_tokens): a sample with no valid token attends to all of them
+        any_valid = valid.any(dim=-1, keepdim=True)
+        attend = valid | ~any_valid
+        # (batch, n_tokens) -> (batch, 1, 1, n_tokens)
+        attend = self.keys_over_queries(attend)
+        bias = torch.zeros_like(attend, dtype=query.dtype)
+        blocked = ~attend
+        bias = bias.masked_fill(blocked, float("-inf"))
+        dropout_p = self.attn_drop.p if self.training else 0.0
         output = scaled_dot_product_attention(
             query,
             key,
             value,
             attn_mask=bias,
-            dropout_p=self.attn_drop.p if self.training else 0.0,
+            dropout_p=dropout_p,
             scale=1.0 / math.sqrt(self.head_dim),
         )
-        # (B, heads, N, head_dim) -> (B, N, D)
-        return self.proj(output.transpose(1, 2).flatten(2))
+        # (batch, heads, n_tokens, head_dim) -> (batch, n_tokens, dim)
+        output = self.merge_heads(output)
+        return self.proj(output)
 
 
-class _Block(nn.Module):
+class _TransformerBlock(nn.Module):
     """Pre-norm block: QK-norm rotary self-attention, then feed-forward.
 
     Private because its attention takes per-token positions and a validity mask
@@ -397,7 +507,7 @@ class _Block(nn.Module):
     ):
         super().__init__()
         self.norm1 = nn.LayerNorm(d_model)
-        self.attn = _MultiHeadAttention(d_model, n_heads, dropout, rope_base, qk_norm)
+        self.attn = _RotaryAttention(d_model, n_heads, dropout, rope_base, qk_norm)
         self.norm2 = nn.LayerNorm(d_model)
         self.mlp = FeedForwardBlock(
             d_model, 1, dropout, activation, hidden_features=mlp_hidden
@@ -407,29 +517,36 @@ class _Block(nn.Module):
     def forward(
         self, values: torch.Tensor, positions: torch.Tensor, valid: torch.Tensor
     ) -> torch.Tensor:
-        values = values + self.drop(self.attn(self.norm1(values), positions, valid))
-        return values + self.mlp(self.norm2(values))
+        # (batch, n_tokens, d_model) -> (batch, n_tokens, d_model)
+        normed = self.norm1(values)
+        attended = self.attn(normed, positions, valid)
+        attended = self.drop(attended)
+        values = values + attended
+        normed = self.norm2(values)
+        update = self.mlp(normed)
+        return values + update
 
 
 class _Encoder(nn.Module):
-    """``depth`` blocks and a final LayerNorm."""
+    """The Transformer blocks and a final LayerNorm."""
 
-    def __init__(self, d_model, depth, *block):
+    def __init__(self, blocks: list[nn.Module], d_model: int):
         super().__init__()
-        self.blocks = nn.ModuleList([_Block(d_model, *block) for _ in range(depth)])
+        self.blocks = nn.ModuleList(blocks)
         self.norm = nn.LayerNorm(d_model)
 
     def forward(
         self, values: torch.Tensor, positions: torch.Tensor, valid: torch.Tensor
     ) -> torch.Tensor:
+        # (batch, n_tokens, d_model) -> (batch, n_tokens, d_model)
         for block in self.blocks:
             values = block(values, positions, valid)
         return self.norm(values)
 
 
 def _coordinates(chs_info, pos_center, pos_scale) -> np.ndarray:
-    """``(n_chans, 4)``: ``(loc[:3] - pos_center) / pos_scale`` (NaN when
-    unknown or all zero) and 0 for HbO, 1 for HbR, as the official
+    """``(n_chans, 4)`` :math:`u_c`: ``(loc[:3] - pos_center) / pos_scale``
+    (NaN when unknown or all zero) and 0 for HbO, 1 for HbR, as the official
     ``chromophore_map``; ``(0, 4)`` without ``chs_info`` or any location."""
     if chs_info is None:
         return np.zeros((0, 4), np.float32)
@@ -437,11 +554,12 @@ def _coordinates(chs_info, pos_center, pos_scale) -> np.ndarray:
     if "unknown" in chromophores:
         name = chs_info[chromophores.index("unknown")].get("ch_name")
         raise ValueError(f"MtReNIRS needs HbO/HbR channels, got {name!r}.")
-    loc = np.asarray(
-        extract_channel_locations_from_chs_info(chs_info, fill_missing=True)
-    )
+    loc = extract_channel_locations_from_chs_info(chs_info, fill_missing=True)
+    loc = np.asarray(loc)
     loc[(loc == 0).all(axis=1)] = np.nan  # MNE without a montage: NaN or zeros
     if not np.isfinite(loc).any():  # forward raises unless coordinates are given
         return np.zeros((0, 4), np.float32)
-    xyz = (loc - np.asarray(pos_center, dtype=np.float32)) / float(pos_scale)
-    return np.c_[xyz, np.equal(chromophores, "hbr")].astype(np.float32)
+    center = np.asarray(pos_center, dtype=np.float32)
+    xyz = (loc - center) / float(pos_scale)
+    is_hbr = np.equal(chromophores, "hbr")
+    return np.c_[xyz, is_hbr].astype(np.float32)
