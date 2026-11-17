@@ -25,66 +25,119 @@ from braindecode.models.util import fnirs_channel_order, fnirs_split_hbo_hbr
 
 
 class JungInspiredMAE(EEGModuleMixin, nn.Module):
-    r"""The GeoNIRS authors' Jung-inspired masked autoencoder (Li et al., 2026).
+    r"""JungMAE, the GeoNIRS authors' masked autoencoder after Jung et al. (2025).
 
     :bdg-info:`Attention/Transformer` :bdg-danger:`Foundation Model`
 
     .. versionadded:: 2.1
 
-    Jung et al. :footcite:`jung2025mae` "propose a novel foundation model for
-    fNIRS data based on a self-supervised masked autoencoder framework", and
-    report that "a larger masking size aligns with the low-frequency nature of
-    fNIRS signals". They released no code or weights. The GeoNIRS authors
-    :footcite:`li2026geonirs` "evaluate a paper-guided implementation of the
-    multi-dataset fNIRS pretraining framework of Jung et al. (2025), denoted
-    as Jung-inspired MAE. To accommodate heterogeneous channel counts,
-    Jung-inspired MAE uses channel-independent encoding with shared
-    parameters but does not model physical channel geometry"; it is "a
+    The architecture follows Jung, Lee and An (IEEE BCI 2025,
+    doi:10.1109/BCI65088.2025.10931275), who "propose a novel foundation model
+    for fNIRS data based on a self-supervised masked autoencoder framework"
+    :footcite:`jung2025mae` and released no code. This class ports the GeoNIRS
+    authors' re-implementation (``model/`` of GeoNIRS at ``81f8995``), "a
     paper-guided implementation rather than an exact reproduction of the
-    original method". This class ports that implementation (their
-    ``jung_inspired_vanilla_mae``) and loads the weights they trained,
-    ``jung_mae.pt``; it is not code by Jung et al.
+    original method", and loads ``jung_mae.pt``, which the GeoNIRS authors
+    trained; their paper calls it Jung-MAE (Tables 14 and 15)
+    :footcite:`li2026geonirs`. It encodes channels independently with shared
+    parameters and does not model channel geometry.
 
-    Each HbO/HbR pair is encoded on its own: its samples are cut into patches
-    of ``patch_samples`` HbO and HbR samples, each patch is projected to a
-    token, sinusoidal patch positions are added, and a pre-norm Transformer
-    encodes the tokens of the pair. A linear head reads all the tokens, as the
-    benchmark's ``flatten_linear`` head (whose training-set standardization of
-    the features is left to the caller). NaN marks a missing sample: patches
-    with too few finite samples are left out of attention and zeroed.
+    Each HbO/HbR pair is cut into patches of ``patch_samples`` time points;
+    the HbO and HbR samples of a patch are interleaved
+    (``[HbO_t, HbR_t, ...]``), projected to ``encoder_dim`` (``patch_embed``)
+    and given a sinusoidal patch position. A pre-norm Transformer
+    (``encoder``) encodes the patches of each pair, with the same weights for
+    every pair. A patch with fewer than ``minimum_patch_valid_fraction`` valid
+    samples is left out of the attention and its token is zero. Pretraining
+    (not ported) hid half of the valid patches of each pair and reconstructed
+    them with a 2-layer, 96-wide decoder under a mean squared error. The head
+    is the benchmark's ``flatten_linear``: all tokens flattened, then Dropout
+    (``head_dropout``) and one Linear (``final_layer``).
 
-    :meth:`load_state_dict` takes the GeoNIRS ``jung_mae.pt`` (decoder
-    dropped). The file holds no data configuration; the GeoNIRS benchmark
-    feeds it the same rows as :class:`GeoNIRS`: 5 Hz HbO/HbR in 150-sample
-    (30 s) windows, each recording's HbO and HbR z-scored separately.
+    **Braindecode mapping.** ``x`` is ``(batch, n_chans, n_times)``,
+    ``n_chans = 2 * n_pairs``: HbO rows then HbR rows, or MNE's interleaved
+    order read from ``chs_info``. The reference takes ``hbo``/``hbr`` tensors
+    with validity masks; here NaN marks a missing sample (an all-NaN row, a
+    missing channel) and the opt-in ``mask`` marks more. :meth:`encode`
+    returns the reference's ``"foundation"``
+    ``(batch, n_pairs, n_patches, encoder_dim)`` and ``"valid"``. With
+    ``jung_mae.pt`` the features equal the reference's in eval mode (max-abs
+    0.0, with and without missing samples); in training mode the reference
+    packs the visible tokens and the port masks keys, so dropout draws differ.
+    The benchmark's training-set standardization of the features is left to
+    the caller. ``final_layer`` is drawn as the reference's other Linear
+    layers (Xavier uniform, zero bias); the benchmark head keeps PyTorch's
+    default. ``on_non_divisible="pad"``/``"crop"`` and ``mask`` are additions
+    of the port; ``ch_mask`` is refused, as ``final_layer`` spans every pair.
+
+    .. important::
+       **Pre-trained weights.** ``checkpoint/jung_mae.pt`` of
+       github.com/GeoNIRS/GeoNIRS at ``81f8995`` (sha256 ``6bb13e85...``), not
+       on the Hugging Face Hub. :meth:`load_state_dict` takes the payload as
+       released, drops the decoder and keeps the new head:
+
+       .. code-block:: python
+
+           payload = torch.load("jung_mae.pt", map_location="cpu", weights_only=True)
+           model = JungInspiredMAE(n_chans=40, n_outputs=2, n_times=60, sfreq=5.0)
+           model.load_state_dict(payload)
+
+       It stores the model configuration (the defaults here), no data
+       configuration. The GeoNIRS paper feeds every model the same windows:
+       HbO and HbR (µmol/L) resampled to 5 Hz and each z-scored per recording
+       over all valid channels and samples; 30 s windows for pretraining,
+       each task's length (10 s or 12 s) downstream.
 
     Parameters
     ----------
     patch_samples : int, default=10
-        Samples per patch and chromophore (2 s at 5 Hz).
+        Reference ``patch_samples``: samples per patch (2 s at 5 Hz).
     on_non_divisible : {"error", "pad", "crop"}, default="error"
-        A ``n_times`` that is not a multiple of ``patch_samples`` is refused,
-        as by the reference, zero-padded or cropped.
+        A ``n_times`` that is not a multiple of ``patch_samples`` is refused
+        (as the reference), zero-padded or cropped.
     encoder_dim : int, default=192
-        Token width.
+        Reference ``encoder_dim``: token width.
     encoder_layers : int, default=4
-        Transformer layers.
+        Reference ``encoder_layers``: Transformer layers.
     encoder_heads : int, default=8
-        Attention heads per layer.
+        Reference ``encoder_heads``: attention heads per layer.
     mlp_ratio : float, default=4.0
-        Feed-forward width relative to ``encoder_dim``.
+        Reference ``mlp_ratio``: feed-forward width over ``encoder_dim``.
     channel_order : {"stacked", "interleaved"} or None, default=None
-        ``[HbO_1..HbO_C, HbR_1..HbR_C]`` or MNE's ``[HbO_1, HbR_1, ...]``;
-        ``None`` reads it from ``chs_info``, and is ``"stacked"`` without it.
+        ``[HbO_1..HbO_P, HbR_1..HbR_P]`` or MNE's ``[HbO_1, HbR_1, ...]``;
+        ``None`` reads it from ``chs_info`` (``"stacked"`` without it).
         ``n_chans`` must be even.
     drop_prob : float, default=0.1
-        Dropout in the encoder layers.
+        Reference ``dropout`` in the encoder layers.
     head_drop_prob : float, default=0.1
-        Dropout before ``final_layer``.
+        Benchmark ``head_dropout``, before ``final_layer``.
     minimum_patch_valid_fraction : float, default=0.8
-        Fraction of finite samples a patch needs to be valid.
+        Reference name: fraction of valid samples a patch needs.
     activation : type[nn.Module], default=nn.GELU
-        Activation of the encoder feed-forward sub-layers.
+        Feed-forward activation (reference: ``"gelu"``).
+
+    Notes
+    -----
+    Protocol of the GeoNIRS benchmark (paper Appendix B.5-B.6): eight
+    held-out binary tasks, subject-level five-fold cross-validation, seeds
+    810 and 811; 30 epochs, batch 16, AdamW (weight decay 0.05), 3 warmup
+    epochs and cosine decay, class-weighted cross-entropy, early stopping
+    (patience 15), model selection by validation balanced accuracy, one test
+    evaluation. The linear probe (LP) trains the head only (learning rate
+    1e-4); LoRA (rank 4, alpha 8) adapts every Linear.
+
+    Replication of Jung-MAE-LP with ``jung_mae.pt`` in this port and the
+    benchmark's linear-probe loop (seeds 810, 811, mean over folds and
+    seeds); the reference encoder gives the same features (max-abs 0.0):
+
+    =====================  ========  =================  ========
+    Task                   Metric    GeoNIRS paper (%)  Port (%)
+    =====================  ========  =================  ========
+    DS42 (action mode)     macro-F1  68.36              68.35
+    DS42 (action mode)     AUROC     76.78              76.80
+    DS19 (pain intensity)  macro-F1  54.23              54.95
+    DS19 (pain intensity)  AUROC     58.39              58.63
+    =====================  ========  =================  ========
 
     References
     ----------
