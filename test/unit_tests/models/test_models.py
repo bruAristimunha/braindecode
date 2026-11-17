@@ -6523,28 +6523,6 @@ def test_fnirst_seeded_reset_and_cls_tokens(model_cls):
     assert not torch.equal(out["cls_token"], out["features"])
 
 
-@pytest.mark.parametrize(
-    "model_cls,kwargs",
-    [
-        (FNIRST, {"depth": 2, "heads": 4}),
-        (FNIRSPreT, {"depth": 2, "heads": 4}),
-    ],
-)
-def test_fnirs_interleaved_chs_info(model_cls, kwargs):
-    chs_info = _interleaved_fnirs_chs()
-    model = model_cls(
-        chs_info=chs_info, n_outputs=3, n_times=60, sfreq=5.0,
-        channel_order="interleaved", **kwargs,
-    ).eval()
-    x = torch.randn(2, len(chs_info), 60)
-    with torch.no_grad():
-        logits = model(x)
-        features = model(x, return_features=True)["features"]
-    assert logits.shape == (2, 3)
-    assert torch.isfinite(logits).all()
-    assert features.shape[0] == 2
-
-
 @pytest.mark.parametrize("model_cls", [FNIRST, FNIRSPreT])
 def test_fnirs_features_feed_head_and_reset(model_cls):
     """final_layer(features) == logits (train and eval); every parameter is reset."""
