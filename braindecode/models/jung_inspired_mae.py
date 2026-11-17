@@ -30,15 +30,27 @@ class JungInspiredMAE(EEGModuleMixin, nn.Module):
 
     .. versionadded:: 2.1
 
-    The GeoNIRS authors :footcite:`li2026geonirs` implemented, from the paper,
-    the fNIRS masked autoencoder of Jung et al. :footcite:`jung2025mae` as a
-    baseline (their ``jung_inspired_vanilla_mae``) and trained its weights,
-    ``jung_mae.pt``; this is a port of that implementation, not of code by
-    Jung et al. Each HbO/HbR pair's samples are cut into patches, embedded
-    with sinusoidal positions and encoded by a pre-norm transformer, one pair
-    at a time; a linear head reads all the tokens. NaN marks a missing
-    sample: patches with too few finite samples are left out of attention
-    and zeroed.
+    Jung et al. :footcite:`jung2025mae` "propose a novel foundation model for
+    fNIRS data based on a self-supervised masked autoencoder framework", and
+    report that "a larger masking size aligns with the low-frequency nature of
+    fNIRS signals". They released no code or weights. The GeoNIRS authors
+    :footcite:`li2026geonirs` "evaluate a paper-guided implementation of the
+    multi-dataset fNIRS pretraining framework of Jung et al. (2025), denoted
+    as Jung-inspired MAE. To accommodate heterogeneous channel counts,
+    Jung-inspired MAE uses channel-independent encoding with shared
+    parameters but does not model physical channel geometry"; it is "a
+    paper-guided implementation rather than an exact reproduction of the
+    original method". This class ports that implementation (their
+    ``jung_inspired_vanilla_mae``) and loads the weights they trained,
+    ``jung_mae.pt``; it is not code by Jung et al.
+
+    Each HbO/HbR pair is encoded on its own: its samples are cut into patches
+    of ``patch_samples`` HbO and HbR samples, each patch is projected to a
+    token, sinusoidal patch positions are added, and a pre-norm Transformer
+    encodes the tokens of the pair. A linear head reads all the tokens, as the
+    benchmark's ``flatten_linear`` head (whose training-set standardization of
+    the features is left to the caller). NaN marks a missing sample: patches
+    with too few finite samples are left out of attention and zeroed.
 
     :meth:`load_state_dict` takes the GeoNIRS ``jung_mae.pt`` (decoder
     dropped). The file holds no data configuration; the GeoNIRS benchmark
@@ -48,7 +60,7 @@ class JungInspiredMAE(EEGModuleMixin, nn.Module):
     Parameters
     ----------
     patch_samples : int, default=10
-        Samples per patch (2 s at 5 Hz).
+        Samples per patch and chromophore (2 s at 5 Hz).
     on_non_divisible : {"error", "pad", "crop"}, default="error"
         A ``n_times`` that is not a multiple of ``patch_samples`` is refused,
         as by the reference, zero-padded or cropped.
