@@ -6457,6 +6457,24 @@ def test_fnirs_task_models_options_and_features_feed_head(model_cls, kwargs):
     assert torch.isfinite(x.grad).all()
 
 
+def test_fnirsnet_loads_reference_state_dict():
+    """The authors' keys (``conv1``, ``bn1``, ``conv2``, ``bn2``, ``fc``) load
+    through ``mapping`` with ``strict=True``; the forward is the paper's Fig. 2:
+    DHRConv, BN, sigmoid, DWConv + PWConv, BN, sigmoid, FC."""
+    model = FNIRSNet(n_chans=8, n_outputs=3, n_times=20).eval()
+    reference = {
+        k.replace("final_layer.", "fc."): v for k, v in model.state_dict().items()
+    }
+    assert {k.split(".")[0] for k in reference} == {"conv1", "bn1", "conv2", "bn2", "fc"}
+    loaded = FNIRSNet(n_chans=8, n_outputs=3, n_times=20).eval()
+    loaded.load_state_dict(reference, strict=True)
+    x = torch.randn(2, 8, 20)
+    with torch.no_grad():
+        dhr = torch.sigmoid(model.bn1(model.conv1(x.unsqueeze(1))))
+        dws = torch.sigmoid(model.bn2(model.conv2(dhr)))
+        assert torch.equal(loaded(x), model.final_layer(dws.flatten(1)))
+
+
 def test_s4d_real_arithmetic_matches_complex_fft():
     """The real-arithmetic ``_S4DLayer`` equals the reference complex kernel + FFT."""
     torch.manual_seed(42)
