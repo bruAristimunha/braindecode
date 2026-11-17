@@ -3,7 +3,7 @@
 # License: Apache-2.0
 # Adapted from https://github.com/wzhlearning/fNIRS4D (Apache-2.0); S4D kernel after
 # https://github.com/state-spaces/s4 (Apache-2.0).
-"""fNIRS4D: diagonal state-space network for fNIRS classification."""
+"""fNIRS4D: Domain Knowledge Fused State Space Model for fNIRS-Based BCIs."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from typing import Literal
 
 import torch
 import torch.nn.functional as F
+from einops.layers.torch import Rearrange
 from torch import nn
 
 from braindecode.models.base import EEGModuleMixin
@@ -29,22 +30,31 @@ class FNIRS4D(EEGModuleMixin, nn.Module, license="apache-2.0"):
 
     .. versionadded:: 2.1
 
-    With ``compute_hbt`` the HbR half of the montage becomes HbT = HbO + HbR. A
-    full-window ``Conv2d`` maps the channels to a sequence processed by S4D-Lin
-    layers (causal depthwise convolution, GLU, residual ``LayerNorm``); its mean
-    joins the mean-hemoglobin branch (``mean_branch``) before ``final_layer``.
-    The S4D kernel is computed in real arithmetic (no complex tensors, no FFT).
-    The parameter names are the authors'; ``mapping`` loads their ``fc.0.*``
-    head, so a reference ``state_dict`` loads with ``strict=True``.
-    Adapted from the authors' code
-    (`License <https://github.com/wzhlearning/fNIRS4D/blob/main/LICENSE>`_).
+    From the abstract: "Diagonally structured state space sequence model
+    (S4D), simple and efficient diagonal versions of SSMs, are introduced to
+    the fNIRS domain. We incorporate domain knowledge into an S4D-based
+    lightweight fNIRS classification model named fNIRS4D."
+
+    The layers follow the authors' code. With ``compute_hbt``, the HbR half of
+    the montage becomes HbT = HbO + HbR, as their data loader does. The fNIRS
+    knowledge embedding (``fNIRS_knowledge_embedding``: a full-window
+    convolution, instance normalization and a :math:`1 \times 1` convolution)
+    gives one sequence per channel, processed by ``n_layers`` S4D layers
+    (S4D-Lin kernel, causal depthwise convolution, ``D`` skip, GLU and a
+    residual ``LayerNorm``). Their mean joins the mean hemoglobin branch
+    (``mean_hemoglobin_branch``) before ``final_layer``. The S4D kernel is
+    computed in real arithmetic (no complex tensors, no FFT). The parameter
+    names are the authors'; ``mapping`` loads their ``fc.0.*`` head, so their
+    ``state_dict`` loads with ``strict=True``.
+
+    `License <https://github.com/wzhlearning/fNIRS4D/blob/main/LICENSE>`_
 
     Parameters
     ----------
     n_layers : int, default=4
-        Number of S4D layers.
+        Number of S4D layers (``n_layers`` in the authors' code).
     d_state : int, default=64
-        State dimension of each S4D kernel (even: conjugate pairs).
+        State dimension :math:`N` of each S4D kernel (even: conjugate pairs).
     avg_size : int, default=10
         Samples of the moving average of the ``"multiscale"`` branch, clamped
         to ``n_times``.
@@ -54,17 +64,18 @@ class FNIRS4D(EEGModuleMixin, nn.Module, license="apache-2.0"):
         ``LayerNorm`` before each S4D layer instead of after the residual sum.
     compute_hbt : bool, default=True
         Read the channels as HbO/HbR pairs (``channel_order``) and replace HbR
-        by HbT = HbO + HbR, as the reference does; needs an even ``n_chans``.
+        by HbT = HbO + HbR; needs an even ``n_chans``. ``False`` takes the
+        channels as they are (e.g. an [HbO, HbT] montage).
     channel_order : {"stacked", "interleaved"} or None, default=None
         Pair order: ``[HbO..., HbR...]`` or ``[HbO_1, HbR_1, ...]`` (MNE);
         ``None`` reads it from ``chs_info``.
     mean_branch : {"multiscale", "time_mean"}, default="multiscale"
-        Mean-hemoglobin branch of the reference: ``"multiscale"`` (its
+        Mean hemoglobin branch of the authors' code: ``"multiscale"`` (their
         subject-independent ``LOSO-CV`` mode) convolves the channel mean and
-        its moving average over the window; ``"time_mean"`` (its
+        its moving average over the window; ``"time_mean"`` (their
         subject-specific ``KFold-CV`` mode) is the time mean of each channel.
     activation, branch_activation : type[nn.Module], default=nn.GELU, nn.ELU
-        Activations of the S4D layers and of the mean-hemoglobin branch.
+        Activations of the S4D layers and of the mean hemoglobin branch.
 
     References
     ----------
@@ -95,36 +106,50 @@ class FNIRS4D(EEGModuleMixin, nn.Module, license="apache-2.0"):
             n_outputs, n_chans, chs_info, n_times, input_window_seconds, sfreq
         )
         del n_outputs, n_chans, chs_info, n_times, input_window_seconds, sfreq
-        self.prenorm, self.compute_hbt = prenorm, compute_hbt
-        c, t = self.n_chans, self.n_times
-        if compute_hbt and c % 2:
-            raise ValueError(f"compute_hbt needs HbO/HbR pairs, got n_chans={c}.")
+        n_chans = self.n_chans
+        n_times = self.n_times
+        if compute_hbt and n_chans % 2:
+            raise ValueError(f"compute_hbt needs HbO/HbR pairs, got n_chans={n_chans}.")
+        self.prenorm = prenorm
+        self.compute_hbt = compute_hbt
         pairs_info = self._chs_info if compute_hbt else None
         self.channel_order = fnirs_channel_order(pairs_info, channel_order)
+        self.to_fnirs_tensor = Rearrange("batch chans time -> batch 1 chans time")
         self.mean_hemoglobin_branch: nn.Module
         if mean_branch == "multiscale":
-            multiscale = _MultiscaleMeanBranch(
-                c, t, min(avg_size, t), branch_activation
+            multiscale = _MultiscaleMeanHemoglobinBranch(
+                n_chans, n_times, min(avg_size, n_times), branch_activation
             )
-            self.mean_hemoglobin_branch, n_mean = multiscale, multiscale.n_features
+            self.mean_hemoglobin_branch = multiscale
+            n_mean = multiscale.n_features
         elif mean_branch == "time_mean":
-            self.mean_hemoglobin_branch, n_mean = nn.AvgPool2d((1, t), 1), c
+            self.mean_hemoglobin_branch = nn.Sequential(
+                nn.AvgPool2d((1, n_times), 1),
+                Rearrange("batch 1 chans 1 -> batch chans"),
+            )
+            n_mean = n_chans
         else:
             raise ValueError(
                 f"mean_branch must be 'multiscale' or 'time_mean', got {mean_branch!r}."
             )
         self.fNIRS_knowledge_embedding = nn.Sequential(
-            nn.Conv2d(1, c, (1, t)),
+            nn.Conv2d(1, n_chans, (1, n_times)),
             # a single channel has no instance statistics to normalize
-            nn.InstanceNorm2d(c) if c > 1 else nn.Identity(),
-            nn.Conv2d(c, c, 1),
+            nn.InstanceNorm2d(n_chans) if n_chans > 1 else nn.Identity(),
+            nn.Conv2d(n_chans, n_chans, 1),
+            # one S4D sequence per channel, along the filters
+            Rearrange("batch filters chans 1 -> batch chans filters"),
         )
-        self.s4d_layers, self.norms = nn.ModuleList(), nn.ModuleList()
+        self.s4d_layers = nn.ModuleList()
+        self.norms = nn.ModuleList()
         for _ in range(n_layers):
-            self.s4d_layers.append(_S4DLayer(c, d_state, drop_prob, activation))
-            self.norms.append(nn.LayerNorm(c))
+            self.s4d_layers.append(_S4DLayer(n_chans, d_state, drop_prob, activation))
+            self.norms.append(nn.LayerNorm(n_chans))
         self.dropout = nn.Dropout1d(drop_prob)
-        self.final_layer = nn.Linear(c + n_mean, self.n_outputs)
+        # LayerNorm and the mean read the channel axis last
+        self.channels_last = Rearrange("batch chans filters -> batch filters chans")
+        self.channels_first = Rearrange("batch filters chans -> batch chans filters")
+        self.final_layer = nn.Linear(n_chans + n_mean, self.n_outputs)
         self.mapping = {f"fc.0.{k}": f"final_layer.{k}" for k in ("weight", "bias")}
 
     def reset_head(self, n_outputs: int) -> None:
@@ -138,33 +163,48 @@ class FNIRS4D(EEGModuleMixin, nn.Module, license="apache-2.0"):
         return_features: bool = False,
         ch_mask: torch.Tensor | None = None,
     ) -> torch.Tensor | dict[str, torch.Tensor | None]:
+        """Logits ``(batch, n_outputs)`` of ``x`` ``(batch, n_chans, n_times)``.
+
+        ``return_features=True`` gives ``{"features", "cls_token": None}``; a
+        ``ch_mask`` raises a ``ValueError`` (the layers span all channels).
+        """
         if ch_mask is not None:
             raise ValueError("FNIRS4D does not accept ch_mask: layers span n_chans.")
         if self.compute_hbt:
+            # 2 x (batch, n_chans // 2, n_times)
             hbo, hbr = fnirs_split_hbo_hbr(x, self.channel_order)
-            x = torch.cat((hbo, hbo + hbr), dim=1)  # [HbO, HbT]
-        x = x.unsqueeze(1)  # (batch, 1, n_chans, n_times)
-        mean_features = self.mean_hemoglobin_branch(x).flatten(1)  # (batch, n_mean)
-        x = self.fNIRS_knowledge_embedding(x)  # (batch, n_chans, n_chans, 1)
-        # S4D runs along the input-channel axis: (batch, d_model=n_chans, L=n_chans)
-        x = x.flatten(2).transpose(-1, -2)
+            hbt = hbo + hbr  # (batch, n_chans // 2, n_times)
+            x = torch.cat((hbo, hbt), dim=1)  # [HbO, HbT]: (batch, n_chans, n_times)
+        x = self.to_fnirs_tensor(x)  # (batch, 1, n_chans, n_times)
+        mean_features = self.mean_hemoglobin_branch(x)  # (batch, n_mean)
+        x = self.fNIRS_knowledge_embedding(x)  # (batch, n_chans, filters = n_chans)
         for layer, norm in zip(self.s4d_layers, self.norms):
-            z = x
+            layer_input = x  # (batch, n_chans, filters)
             if self.prenorm:
-                z = norm(z.transpose(-1, -2)).transpose(-1, -2)
-            x = x + self.dropout(layer(z))
+                layer_input = self.channels_last(layer_input)
+                layer_input = norm(layer_input)  # (batch, filters, n_chans)
+                layer_input = self.channels_first(layer_input)
+            layer_output = layer(layer_input)  # (batch, n_chans, filters)
+            layer_output = self.dropout(layer_output)
+            x = x + layer_output  # (batch, n_chans, filters)
             if not self.prenorm:
-                x = norm(x.transpose(-1, -2)).transpose(-1, -2)
-        features = torch.cat((x.transpose(-1, -2).mean(dim=1), mean_features), 1)
+                x = self.channels_last(x)
+                x = norm(x)  # (batch, filters, n_chans)
+                x = self.channels_first(x)
+        x = self.channels_last(x)  # (batch, filters, n_chans)
+        # not a Reduce layer: it permutes first, which moves the last bit of the
+        # embedding's bias gradient
+        x = x.mean(dim=1)  # (batch, n_chans)
+        features = torch.cat((x, mean_features), 1)  # (batch, n_chans + n_mean)
         if return_features:
             return {"features": features, "cls_token": None}
-        return self.final_layer(features)
+        return self.final_layer(features)  # (batch, n_outputs)
 
 
-class _MultiscaleMeanBranch(nn.Module):
-    """The reference's LOSO-CV mean-hemoglobin branch: the channel mean and its
-    moving average, each through a full-window temporal ``Conv2d``, batch
-    normalization and ``activation``."""
+class _MultiscaleMeanHemoglobinBranch(nn.Module):
+    """The authors' subject-independent (LOSO-CV) mean hemoglobin branch: the
+    channel mean and its moving average, each through a full-window temporal
+    ``Conv2d``, batch normalization and ``activation``."""
 
     def __init__(
         self, n_chans: int, n_times: int, avg_size: int, activation: type
@@ -173,30 +213,39 @@ class _MultiscaleMeanBranch(nn.Module):
         n_full = max(1, n_chans // 2)
         n_short = max(1, n_chans - n_full)
         self.n_features = n_full + n_short
-        self.avg_size = avg_size
+        self.avg_1 = nn.AvgPool2d((n_chans, 1), 1)
+        self.avg_2 = nn.AvgPool2d((1, avg_size), 1)
         self.conv_1 = nn.Conv2d(1, n_full, (1, n_times))
         self.bn_1 = nn.BatchNorm2d(n_full)
         self.conv_2 = nn.Conv2d(1, n_short, (1, n_times - avg_size + 1))
         self.bn_2 = nn.BatchNorm2d(n_short)
         self.activation = activation()
+        self.flatten = Rearrange("batch filters 1 1 -> batch filters")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        mean = F.avg_pool2d(x, (x.shape[2], 1), 1)  # (batch, 1, 1, n_times)
-        short = F.avg_pool2d(mean, (1, self.avg_size), 1)
-        full = self.activation(self.bn_1(self.conv_1(mean)))  # (batch, n_full, 1, 1)
-        short = self.activation(self.bn_2(self.conv_2(short)))  # (batch, n_short, 1, 1)
-        return torch.cat((full, short), dim=1)
+        # time' = n_times - avg_size + 1
+        mean = self.avg_1(x)  # channel mean: (batch, 1, 1, n_times)
+        short = self.avg_2(mean)  # moving average: (batch, 1, 1, time')
+        full = self.conv_1(mean)  # (batch, n_full, 1, 1)
+        full = self.bn_1(full)  # (batch, n_full, 1, 1)
+        full = self.activation(full)  # (batch, n_full, 1, 1)
+        short = self.conv_2(short)  # (batch, n_short, 1, 1)
+        short = self.bn_2(short)  # (batch, n_short, 1, 1)
+        short = self.activation(short)  # (batch, n_short, 1, 1)
+        features = torch.cat((full, short), dim=1)  # (batch, n_features, 1, 1)
+        return self.flatten(features)  # (batch, n_features)
 
 
 class _S4DKernel(nn.Module):
-    """S4D-Lin kernel ``2 Re(C (exp(dt A) - 1) / A exp(dt A l))`` in real arithmetic."""
+    """S4D-Lin kernel ``K = 2 Re(C (exp(dt A) - 1) / A exp(dt A l))``, in real
+    arithmetic: ``A = -exp(log_A_real) + i A_imag``, ``dt = exp(log_dt)``."""
 
-    def __init__(self, d_model: int, N: int) -> None:
+    def __init__(self, d_model: int, d_state: int) -> None:
         super().__init__()
-        self.C = nn.Parameter(torch.empty(d_model, N // 2, 2))
+        self.C = nn.Parameter(torch.empty(d_model, d_state // 2, 2))
         self.log_dt = nn.Parameter(torch.empty(d_model))
-        self.log_A_real = nn.Parameter(torch.empty(d_model, N // 2))
-        self.A_imag = nn.Parameter(torch.empty(d_model, N // 2))
+        self.log_A_real = nn.Parameter(torch.empty(d_model, d_state // 2))
+        self.A_imag = nn.Parameter(torch.empty(d_model, d_state // 2))
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -208,28 +257,38 @@ class _S4DKernel(nn.Module):
                 math.pi * torch.arange(self.A_imag.shape[1]).to(self.A_imag)
             )
 
-    def forward(self, L: int) -> torch.Tensor:
-        dt = torch.exp(self.log_dt).unsqueeze(-1)  # (H, 1)
-        a_r, a_i = -torch.exp(self.log_A_real), self.A_imag  # (H, N/2)
-        dar, dai = a_r * dt, a_i * dt
-        exp_dar, cos_dai, sin_dai = torch.exp(dar), torch.cos(dai), torch.sin(dai)
-        half_sin = torch.sin(0.5 * dai)
-        # exp(dt A) - 1, with expm1 for the real part
-        e_r = torch.expm1(dar) * cos_dai - 2.0 * half_sin * half_sin
-        e_i = exp_dar * sin_dai
-        denom = (a_r * a_r + a_i * a_i).clamp_min(1e-12)
-        w_r = (e_r * a_r + e_i * a_i) / denom  # (exp(dt A) - 1) / A
-        w_i = (e_i * a_r - e_r * a_i) / denom
-        c_r, c_i = self.C[..., 0], self.C[..., 1]
-        ct_r, ct_i = c_r * w_r - c_i * w_i, c_r * w_i + c_i * w_r
-        steps = torch.arange(L, device=dt.device, dtype=dt.dtype)
-        exp_r = torch.exp(dar.unsqueeze(-1) * steps)  # (H, N/2, L)
-        angles = dai.unsqueeze(-1) * steps
-        basis_r, basis_i = exp_r * torch.cos(angles), exp_r * torch.sin(angles)
-        return 2.0 * (
-            torch.einsum("hn,hnl->hl", ct_r, basis_r)
-            - torch.einsum("hn,hnl->hl", ct_i, basis_i)
-        )  # (H, L)
+    def forward(self, length: int) -> torch.Tensor:
+        # (d_model, d_state // 2) unless noted; A = a + i b, one call per line
+        dt = torch.exp(self.log_dt)  # (d_model,)
+        dt = dt.unsqueeze(-1)  # (d_model, 1), broadcasts over the state
+        a = -torch.exp(self.log_A_real)
+        b = self.A_imag
+        dt_a = a * dt
+        dt_b = b * dt
+        # exp(dt A) - 1 = e_real + i e_imag, with expm1 and 1 - cos = 2 sin^2
+        exp_dt_a = torch.exp(dt_a)
+        cos_dt_b = torch.cos(dt_b)
+        sin_dt_b = torch.sin(dt_b)
+        half_sin = torch.sin(0.5 * dt_b)
+        e_real = torch.expm1(dt_a) * cos_dt_b - 2.0 * half_sin * half_sin
+        e_imag = exp_dt_a * sin_dt_b
+        # w = (exp(dt A) - 1) / A, then C~ = C w
+        modulus = (a * a + b * b).clamp_min(1e-12)
+        w_real = (e_real * a + e_imag * b) / modulus
+        w_imag = (e_imag * a - e_real * b) / modulus
+        c_real, c_imag = self.C.unbind(-1)
+        ct_real = c_real * w_real - c_imag * w_imag
+        ct_imag = c_real * w_imag + c_imag * w_real
+        # Vandermonde basis exp(dt A l), (d_model, d_state // 2, length)
+        steps = torch.arange(length, device=dt.device, dtype=dt.dtype)
+        dt_a_steps = dt_a.unsqueeze(-1) * steps
+        decay = torch.exp(dt_a_steps)
+        angles = dt_b.unsqueeze(-1) * steps
+        basis_real = decay * torch.cos(angles)
+        basis_imag = decay * torch.sin(angles)
+        kernel = torch.einsum("hn,hnl->hl", ct_real, basis_real)
+        kernel = kernel - torch.einsum("hn,hnl->hl", ct_imag, basis_imag)
+        return 2.0 * kernel  # (d_model, length)
 
 
 class _S4DLayer(nn.Module):
@@ -246,15 +305,23 @@ class _S4DLayer(nn.Module):
         self.output_linear = nn.Sequential(
             nn.Conv1d(d_model, 2 * d_model, 1), nn.GLU(dim=-2)
         )
+        self.to_conv_weight = Rearrange("d_model length -> d_model 1 length")
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         nn.init.normal_(self.D)
         self.kernel.reset_parameters()
 
-    def forward(self, u: torch.Tensor) -> torch.Tensor:
-        L = u.shape[-1]  # u: (batch, H, L)
-        kernel = self.kernel(L).flip(-1).unsqueeze(1)  # (H, 1, L)
-        conv = F.conv1d(F.pad(u, (L - 1, 0)), kernel, groups=u.shape[1])
-        y = conv + u * self.D.unsqueeze(-1)  # (batch, H, L), causal
-        return self.output_linear(self.dropout(self.activation(y)))
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        length = x.shape[-1]  # x: (batch, d_model, length)
+        kernel = self.kernel(length)  # (d_model, length)
+        kernel = kernel.flip(-1)  # conv1d correlates: reverse for a convolution
+        kernel = self.to_conv_weight(kernel)  # (d_model, 1, length)
+        padded = F.pad(x, (length - 1, 0))  # causal: (batch, d_model, 2 length - 1)
+        y = F.conv1d(padded, kernel, groups=x.shape[1])  # (batch, d_model, length)
+        skip = self.D.unsqueeze(-1)  # (d_model, 1), broadcasts over time
+        skip = x * skip  # (batch, d_model, length)
+        y = y + skip  # (batch, d_model, length)
+        y = self.activation(y)  # (batch, d_model, length)
+        y = self.dropout(y)  # (batch, d_model, length)
+        return self.output_linear(y)  # (batch, d_model, length)
