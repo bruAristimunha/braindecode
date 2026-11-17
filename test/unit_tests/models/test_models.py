@@ -6581,6 +6581,8 @@ def test_fnirs_masks(model_cls):
     model(hidden, mask=mask).sum().backward()
     assert torch.equal(hidden.grad[mask], torch.zeros_like(hidden.grad[mask]))
     assert hidden.grad[~mask].isfinite().all()
+
+
 def _tccnet_reference(model, x, mask_value):
     """NumPy transcription of the TCCNet Keras layers (DSIP-UPatras/ICASSP2019_TCN
     @cd28909: ``Masking``, ``CausalConv1D``, ``MeanOverTime`` and
