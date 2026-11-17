@@ -153,7 +153,7 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
     clip to :math:`[-6, 6]`, windows [onset, onset + 10 s). Pretraining: 12
     datasets (268 subjects, 567 h), 60-s crops, 25 % of tokens masked, AdamW,
     100 epochs, batch 128, lr :math:`2 \times 10^{-4}`; epoch 95 selected on
-    the validation loss. Evaluation on SujinBak 2019 :footcite:`bak2019open`
+    the validation loss. Evaluation on SujinBak 2019 :footcite:`bak2019ufft`
     (30 subjects, 3 classes): LOSO with ~15 % inner-validation subjects, 50
     epochs, AdamW lr :math:`10^{-4}`, batch 32, best validation macro-F1; LP,
     MLP (64 units), LoRA (r 8, :math:`\alpha` 16), Full-FT, Scratch-FT; and
