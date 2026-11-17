@@ -6461,8 +6461,8 @@ def test_fnirs_task_models_options_and_features_feed_head(model_cls, kwargs):
 
 
 class _AuthorsFNIRSNet(torch.nn.Module):
-    """fNIRSNet.py of wzhlearning/fNIRSNet@11d9dad (Apache-2.0), verbatim
-    apart from formatting: the reference for the port."""
+    """The reference: fNIRSNet.py of wzhlearning/fNIRSNet@11d9dad (Apache-2.0),
+    transcribed with the same layers, state-dict keys and forward."""
 
     def __init__(self, num_class, DHRConv_width=40, DWConv_height=40,
                  num_DHRConv=4, num_DWConv=8):
