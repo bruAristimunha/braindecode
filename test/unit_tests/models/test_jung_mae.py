@@ -1,6 +1,7 @@
 """JungMAE against a transcription of the encoder path of the GeoNIRS authors'
-``model/jung_inspired_mae.py`` (GeoNIRS@81f8995), which packs the valid patches
-of each pair before the Transformer. Runs without the released checkpoint."""
+masked autoencoder module (``model/`` of GeoNIRS@81f8995), which packs the
+valid patches of each pair before the Transformer. Runs without the released
+checkpoint."""
 
 import math
 
@@ -252,7 +253,6 @@ def test_jung_mae_loads_the_released_payload_layout():
     }
     payload = {
         "format_version": 1,
-        "model_family": "jung_inspired_vanilla_mae",
         "model_config": {"patch_samples": 10},
         "model": {**backbone, **decoder},
     }
@@ -285,6 +285,11 @@ def test_jung_mae_rejects_a_fraction_outside_zero_one(fraction):
         JungMAE(
             n_chans=4, n_outputs=2, n_times=60, minimum_patch_valid_fraction=fraction
         )
+
+
+def test_jung_mae_rejects_a_non_positive_patch_size():
+    with pytest.raises(ValueError, match="patch_size must be positive, got 0"):
+        JungMAE(n_chans=4, n_outputs=2, n_times=60, patch_size=0)
 
 
 class _PassThrough(nn.Module):
