@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import math
-from collections import OrderedDict
 from typing import Literal, Optional
 
 import numpy as np
@@ -360,10 +359,10 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
             drop_prob=drop_prob,
             activation=activation,
         )
-        self.hbo_projection = _chromophore_projection(
+        self.hbo_projection = _ChromophoreProjection(
             embed_dim, feature_dim, drop_prob, activation
         )
-        self.hbr_projection = _chromophore_projection(
+        self.hbr_projection = _ChromophoreProjection(
             embed_dim, feature_dim, drop_prob, activation
         )
         self.register_buffer(
@@ -1109,17 +1108,116 @@ class _ChannelCompressorAttention(nn.Module):
         return x
 
 
+class _ChromophoreProjection(nn.Module):
+    r"""Chromophore-specific residual projection :math:`\Pi_s` (paper §2.4).
+
+    "a chromophore-specific residual projection that maps the feature
+    dimension from D to F without mixing latent channels or temporal
+    patches". The authors' ``FeatureProjection`` / ``ScaledFeatureProjection``;
+    HbO and HbR each have their own.
+
+    Parameters
+    ----------
+    embed_dim : int
+        Input width, :math:`D`.
+    feature_dim : int
+        Output width, :math:`F`.
+    drop_prob : float
+        Dropout inside each residual block.
+    activation : type[nn.Module], default=nn.GELU
+        Activation inside each residual block.
+    """
+
+    def __init__(
+        self,
+        embed_dim: int,
+        feature_dim: int,
+        drop_prob: float,
+        activation: type[nn.Module] = nn.GELU,
+    ):
+        super().__init__()
+        # "Projection dimensions" of Table 6: [192, 128, 96, 64] for
+        # GeoNIRS-Base and [384, 192, 96, 128] for GeoNIRS-Large. The
+        # reference writes the first by hand and [D, D / 2, D / 4, F] for
+        # every other size; we follow it.
+        widths = [embed_dim, embed_dim // 2, embed_dim // 4, feature_dim]
+        if embed_dim == 192 and feature_dim == 64:
+            widths = [192, 128, 96, 64]
+
+        # One residual block per change of width; ``blocks`` is the name the
+        # released checkpoints use
+        self.blocks = nn.ModuleList(
+            [
+                _ResidualProjectionBlock(
+                    input_dim=input_dim,
+                    output_dim=output_dim,
+                    drop_prob=drop_prob,
+                    activation=activation,
+                )
+                for input_dim, output_dim in zip(widths[:-1], widths[1:])
+            ]
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Project the latent tokens of one chromophore.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Compressed tokens, ``(batch, n_latent_channels, n_patches,
+            embed_dim)``.
+
+        Returns
+        -------
+        torch.Tensor
+            :math:`Z^s` of the paper, ``(batch, n_latent_channels, n_patches,
+            feature_dim)``.
+        """
+        # Each block acts on the last axis only, so latent channels and
+        # patches are never mixed. The width shrinks block by block, e.g.
+        # 192 -> 128 -> 96 -> 64 for GeoNIRS-Base
+        # (batch, M, P, D) -> (batch, M, P, F)
+        for block in self.blocks:
+            x = block(x)
+        return x
+
+
 class _ResidualProjectionBlock(nn.Module):
-    """The authors' ``ResidualProjectionBlock``: ``skip(x) + residual_scale *
-    main(x)``, ``residual_scale`` starting at 0.1.
+    """One stage of the chromophore projection: a linear skip plus a scaled
+    two-layer update (the authors' ``ResidualProjectionBlock``).
 
     Private because no shared block has a learned residual scale on a
     width-changing skip projection.
+
+    Parameters
+    ----------
+    input_dim : int
+        Input width.
+    output_dim : int
+        Output width.
+    drop_prob : float
+        Dropout between the two layers of the update.
+    activation : type[nn.Module], default=nn.GELU
+        Activation between the two layers of the update.
+    init_scale : float, default=0.1
+        Initial value of the learnable ``residual_scale`` (0.1 in the
+        reference): the block starts close to its linear skip.
     """
 
-    def __init__(self, input_dim, output_dim, drop_prob, activation):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        drop_prob: float,
+        activation: type[nn.Module] = nn.GELU,
+        init_scale: float = 0.1,
+    ):
         super().__init__()
+        self.init_scale = init_scale
+
+        # Skip path: a linear map, since the width changes
         self.skip = nn.Linear(input_dim, output_dim)
+        # Update path: LayerNorm and a two-layer perceptron
         self.main = nn.Sequential(
             nn.LayerNorm(input_dim),
             nn.Linear(input_dim, output_dim),
@@ -1127,33 +1225,24 @@ class _ResidualProjectionBlock(nn.Module):
             nn.Dropout(drop_prob),
             nn.Linear(output_dim, output_dim),
         )
+        # Learnable weight of the update path
         self.residual_scale = nn.Parameter(torch.empty(()))
+
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.constant_(self.residual_scale, 0.1)
+        nn.init.constant_(self.residual_scale, self.init_scale)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """``(..., input_dim)`` -> ``(..., output_dim)``."""
+        # Linear skip: (..., input_dim) -> (..., output_dim)
         skip = self.skip(x)
+        # Scaled update: residual_scale * MLP(LayerNorm(x))
         update = self.main(x)
         update = self.residual_scale * update
-        return skip + update
-
-
-def _chromophore_projection(embed_dim, feature_dim, drop_prob, activation):
-    """Chromophore-specific residual projection from :math:`D` to :math:`F`:
-    three residual stages, ``[192, 128, 96, 64]`` for GeoNIRS-Base and
-    ``[D, D / 2, D / 4, F]`` otherwise (``[384, 192, 96, 128]`` for Large),
-    as the paper's Table 6."""
-    widths = [embed_dim, embed_dim // 2, embed_dim // 4, feature_dim]
-    if embed_dim == 192 and feature_dim == 64:
-        widths = [192, 128, 96, 64]
-    stages = [
-        _ResidualProjectionBlock(widths[i], widths[i + 1], drop_prob, activation)
-        for i in range(3)
-    ]
-    # ``blocks`` is the checkpoints' key path
-    return nn.Sequential(OrderedDict(blocks=nn.Sequential(*stages)))
+        # (..., output_dim)
+        x = skip + update
+        return x
 
 
 def _optode_geometry(chs_info, channel_order: str) -> np.ndarray:
