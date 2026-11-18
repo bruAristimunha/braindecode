@@ -40,6 +40,10 @@ Enhancements
   ``fnirs_split_hbo_hbr`` of ``braindecode.models.util`` read HbO/HbR pairs from
   ``chs_info``, stacked or in MNE's interleaved order (:gh:`1582` by
   `Bruno Aristimunha`_).
+- Add :class:`braindecode.models.DirectEventCNN1D`, the supervised 1D-CNN baseline
+  of the GeoNIRS benchmark (Li et al., 2026): two temporal convolutions with
+  GroupNorm and GELU, a time average and a linear head. Its ``mapping`` loads the
+  authors' state dict (:gh:`DIRECTEVENTCNN1D_PR` by `Bruno Aristimunha`_).
 - :class:`braindecode.models.CodeBrain` compiles with ``torch.compile`` into one graph: its lazy
   kernel-norm initialisation no longer reads a tensor's value on every forward (19 graph breaks
   and 21 compiled graphs for two training steps before, on every device). Checkpoints and
