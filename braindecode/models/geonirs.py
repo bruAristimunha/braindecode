@@ -836,113 +836,208 @@ class _GeometryEncoder(nn.Module):
 
 
 class _ChannelCompressorAttention(nn.Module):
-    """The geometry-aware channel compressor (the authors'
-    ``BrainOmniChannelCompressor``): cross-attention of
-    ``n_latent_channels`` learned queries over the channels, then an output
-    projection and a feed-forward block.
+    """Geometry-aware channel compressor (paper §2.3).
+
+    "To transform variable-size physical channel sets into fixed-length
+    representations", ``n_latent_channels`` learnable latent queries attend
+    over the channels of each patch. The keys are the fused HbO/HbR tokens
+    plus the geometry; "HbO and HbR share the same attention weights but
+    retain separate value representations". The authors'
+    ``BrainOmniChannelCompressor``.
 
     Private because one softmax over the fused HbO/HbR keys weighs both
     chromophores' values (one dropout mask), and the released checkpoints
     name its projections ``q_proj``/``k_proj``/``v_proj``/``out_proj``.
+
+    Parameters
+    ----------
+    embed_dim : int
+        Token width, :math:`D`.
+    n_latent_channels : int
+        Learnable latent queries, :math:`M`.
+    num_heads : int
+        Attention heads, each of width :math:`d_h` = ``embed_dim / num_heads``.
+    drop_prob : float
+        Dropout on the attention weights and in the feed-forward block.
+    activation : type[nn.Module], default=nn.GELU
+        Activation of the feed-forward block.
+    mlp_ratio : float, default=2.0
+        Width of the feed-forward block, over ``embed_dim`` (the reference's
+        ``embedding_dim * 2``).
+    init_std : float, default=0.02
+        Standard deviation of the initial latent queries (the reference's
+        ``randn * 0.02``).
     """
 
-    def __init__(self, embed_dim, n_latent_channels, num_heads, drop_prob, activation):
+    def __init__(
+        self,
+        embed_dim: int,
+        n_latent_channels: int,
+        num_heads: int,
+        drop_prob: float,
+        activation: type[nn.Module] = nn.GELU,
+        mlp_ratio: float = 2.0,
+        init_std: float = 0.02,
+    ):
         super().__init__()
         self.head_dim = embed_dim // num_heads
-        latent_queries = torch.empty(n_latent_channels, embed_dim)
-        self.latent_queries = nn.Parameter(latent_queries)
-        norms = (nn.LayerNorm(embed_dim) for _ in range(3))
-        self.q_norm, self.k_norm, self.v_norm = norms
-        projections = (nn.Linear(embed_dim, embed_dim) for _ in range(4))
-        self.q_proj, self.k_proj, self.v_proj, self.out_proj = projections
+        self.init_std = init_std
+
+        # Latent queries L: the M channels of the compressed montage, shared
+        # by every recording whatever its probe layout
+        self.latent_queries = nn.Parameter(torch.empty(n_latent_channels, embed_dim))
+
+        # LayerNorms of the queries (L), the keys (fused tokens + geometry)
+        # and the values (tokens of one chromophore)
+        self.q_norm = nn.LayerNorm(embed_dim)
+        self.k_norm = nn.LayerNorm(embed_dim)
+        self.v_norm = nn.LayerNorm(embed_dim)
+        # W_Q, W_K, W_V of §2.3; W_V is shared by HbO and HbR
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
+        # "an output projection and a feed-forward block" (§2.3)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+        # Dropout on the attention weights A_p
         self.attn_dropout = nn.Dropout(drop_prob)
         self.out_norm = nn.LayerNorm(embed_dim)
         self.ffn = nn.Sequential(
             nn.LayerNorm(embed_dim),
-            nn.Linear(embed_dim, embed_dim * 2),
+            nn.Linear(embed_dim, round(embed_dim * mlp_ratio)),
             activation(),
             nn.Dropout(drop_prob),
-            nn.Linear(embed_dim * 2, embed_dim),
+            nn.Linear(round(embed_dim * mlp_ratio), embed_dim),
         )
+
+        # The attention runs over the channels of ONE patch: patches join
+        # the batch axis, for the tokens and for their validity
         self.patches_first = Rearrange(
             "batch pairs patches dim -> (batch patches) pairs dim"
         )
         self.patches_first_mask = Rearrange(
             "batch pairs patches -> (batch patches) pairs"
         )
+        # The geometry is the same for every patch of a window
         self.geometry_over_patches = Rearrange("batch pairs dim -> batch 1 pairs dim")
         self.merge_patches = Rearrange(
             "batch patches pairs dim -> (batch patches) pairs dim"
         )
+        # The latent queries are the same for every window and patch
         self.latents_over_batch = Rearrange("latents dim -> 1 latents dim")
+        # Multi-head layout of queries, keys and values
         self.split_heads = Rearrange(
             "batch tokens (heads dim) -> batch heads tokens dim", heads=num_heads
         )
+        # The channel validity masks the keys, for every head and query
         self.keys_over_queries = Rearrange("batch pairs -> batch 1 1 pairs")
+        # Heads are merged back and the two chromophores, attended together
+        # as [V^O | V^R], are separated again
         self.merge_heads = Rearrange(
             "batch heads latents (chrom dim) -> chrom batch latents (heads dim)",
             chrom=2,
         )
         self.active_over_features = Rearrange("batch one -> batch one 1")
+        # Output layout: latent channels before patches
         self.latents_first = Rearrange(
             "batch patches latents dim -> batch latents patches dim"
         )
+
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.normal_(self.latent_queries, 0.0, 0.02)
+        nn.init.normal_(self.latent_queries, 0.0, self.init_std)
 
     def forward(
         self,
-        temporal_hbo: torch.Tensor,
-        temporal_hbr: torch.Tensor,
-        geometry_embedding: Optional[torch.Tensor],
+        hbo: torch.Tensor,
+        hbr: torch.Tensor,
+        geometry: Optional[torch.Tensor],
         patch_valid: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        batch_size, _, n_patches, _ = temporal_hbo.shape
-        # (batch, n_pairs, P, D) -> (batch * P, n_pairs, D): the channels of each patch
-        hbo = self.patches_first(temporal_hbo)
-        hbr = self.patches_first(temporal_hbr)
+        """Compress the channels of each patch into the latent channels.
+
+        Parameters
+        ----------
+        hbo, hbr : torch.Tensor
+            :math:`H^O` and :math:`H^R` of the temporal encoders, each
+            ``(batch, n_pairs, n_patches, embed_dim)``.
+        geometry : torch.Tensor or None
+            :math:`G` of the geometry encoder, ``(batch, n_pairs,
+            embed_dim)``; ``None`` leaves it out of the keys.
+        patch_valid : torch.Tensor
+            Boolean ``(batch, n_pairs, n_patches)``.
+
+        Returns
+        -------
+        tuple of torch.Tensor
+            The compressed HbO and HbR tokens, each ``(batch,
+            n_latent_channels, n_patches, embed_dim)``, zero at the patches
+            with no valid channel.
+        """
+        batch_size, _, n_patches, _ = hbo.shape
+
+        # One attention problem per patch p: its C channels are the tokens
+        # (batch, n_pairs, P, D) -> (batch * P, n_pairs, D): H^O_{:,p}, H^R_{:,p}
+        hbo = self.patches_first(hbo)
+        hbr = self.patches_first(hbr)
         # (batch, n_pairs, P) -> (batch * P, n_pairs)
         valid = self.patches_first_mask(patch_valid)
-        # (M, D) -> (1, M, D) -> (batch * P, M, D): LN(L)
+
+        # Normalised latent queries LN(L), one copy per patch
+        # (M, D) -> (1, M, D) -> (batch * P, M, D)
         latents = self.q_norm(self.latent_queries)
         latents = self.latents_over_batch(latents)
         latents = latents.expand(valid.shape[0], -1, -1)
-        # (batch * P, n_pairs, D): fused HbO/HbR
+
+        # Fused chromophores: \bar{H}_p = (H^O_{:,p} + H^R_{:,p}) / 2
+        # (batch * P, n_pairs, D)
         fused = hbo + hbr
         fused = 0.5 * fused
-        keys_input = fused
-        if geometry_embedding is not None:
+        if geometry is not None:
+            # Geometry-aware keys: \bar{H}_p + G, with G repeated over patches
             # (batch, n_pairs, D) -> (batch, 1, n_pairs, D) -> (batch * P, n_pairs, D)
-            geometry = self.geometry_over_patches(geometry_embedding)
-            geometry = geometry.expand(-1, n_patches, -1, -1)
-            geometry = self.merge_patches(geometry)
-            keys_input = fused + geometry
-        # (batch * P, M, D) -> (batch * P, heads, M, d_h): Q = W_Q LN(L)
+            patch_geometry = self.geometry_over_patches(geometry)
+            patch_geometry = patch_geometry.expand(-1, n_patches, -1, -1)
+            patch_geometry = self.merge_patches(patch_geometry)
+            fused = fused + patch_geometry
+
+        # Queries: Q = W_Q LN(L)
+        # (batch * P, M, D) -> (batch * P, heads, M, d_h)
         query = self.q_proj(latents)
         query = self.split_heads(query)
-        # (batch * P, n_pairs, D) -> (batch * P, heads, n_pairs, d_h): K = W_K LN(.)
-        keys_input = self.k_norm(keys_input)
-        key = self.k_proj(keys_input)
+
+        # Keys: K_p = W_K LN(\bar{H}_p + G)
+        # (batch * P, n_pairs, D) -> (batch * P, heads, n_pairs, d_h)
+        key = self.k_norm(fused)
+        key = self.k_proj(key)
         key = self.split_heads(key)
-        # (batch * P, n_pairs, D) -> (batch * P, heads, n_pairs, d_h): W_V LN(H^s)
+
+        # Values, one set per chromophore: V^s_p = W_V LN(H^s_{:,p})
+        # (batch * P, n_pairs, D) -> (batch * P, heads, n_pairs, d_h)
         value_hbo = self.v_norm(hbo)
         value_hbo = self.v_proj(value_hbo)
         value_hbo = self.split_heads(value_hbo)
         value_hbr = self.v_norm(hbr)
         value_hbr = self.v_proj(value_hbr)
         value_hbr = self.split_heads(value_hbr)
-        # shared attention weights over [V^O | V^R]: (batch * P, heads, n_pairs, 2 d_h)
+        # "HbO and HbR share the same attention weights": attending once to
+        # [V^O | V^R] applies one A_p (and one dropout mask) to both
+        # (batch * P, heads, n_pairs, 2 * d_h)
         value = torch.cat([value_hbo, value_hbr], dim=-1)
-        # (batch * P, 1): a patch with no valid channel attends to all, then is zeroed
+
+        # "Invalid channels are masked before the softmax". A patch with no
+        # valid channel attends to all of them (an all-masked row would give
+        # NaN) and is zeroed in the output block; the reference skips it.
+        # (batch * P, 1)
         active = valid.any(dim=1, keepdim=True)
         attend = valid | ~active
         # (batch * P, n_pairs) -> (batch * P, 1, 1, n_pairs)
         attend = self.keys_over_queries(attend)
+
+        # Z^s_p = A_p V^s_p, with A_p = softmax(Q K_p^T / sqrt(d_h))
+        # (batch * P, heads, M, 2 * d_h)
         dropout_p = self.attn_dropout.p if self.training else 0.0
-        # -> (batch * P, heads, M, 2 d_h)
-        attended = scaled_dot_product_attention(
+        x = scaled_dot_product_attention(
             query,
             key,
             value,
@@ -951,40 +1046,67 @@ class _ChannelCompressorAttention(nn.Module):
             scale=self.head_dim**-0.5,
             exact=True,
         )
-        # (batch * P, heads, M, 2 d_h) -> (2, batch * P, M, D): Z^O, Z^R
-        compressed = self.merge_heads(attended)
+        # Merge the heads and separate the chromophores
+        # (batch * P, heads, M, 2 * d_h) -> (2, batch * P, M, D): Z^O_p, Z^R_p
+        x = self.merge_heads(x)
+
         # (batch * P, 1) -> (batch * P, 1, 1)
         active_weight = self.active_over_features(active)
-        active_weight = active_weight.to(compressed.dtype)
-        latent_hbo = self._output_block(
-            compressed[0], latents, active_weight, batch_size, n_patches
-        )
-        latent_hbr = self._output_block(
-            compressed[1], latents, active_weight, batch_size, n_patches
-        )
-        return latent_hbo, latent_hbr
+        active_weight = active_weight.to(x.dtype)
+
+        # Output projection and feed-forward block, chromophore by chromophore
+        # (batch * P, M, D)
+        hbo = self._output_block(x[0], latents, active_weight)
+        hbr = self._output_block(x[1], latents, active_weight)
+
+        # Patches leave the batch axis; latent channels come before patches
+        # (batch * P, M, D) -> (batch, P, M, D) -> (batch, M, P, D)
+        hbo = hbo.unflatten(0, [batch_size, n_patches])
+        hbo = self.latents_first(hbo)
+        hbo = hbo.contiguous()
+        hbr = hbr.unflatten(0, [batch_size, n_patches])
+        hbr = self.latents_first(hbr)
+        hbr = hbr.contiguous()
+        return hbo, hbr
 
     def _output_block(
-        self,
-        compressed: torch.Tensor,
-        latents: torch.Tensor,
-        active_weight: torch.Tensor,
-        batch_size: int,
-        n_patches: int,
+        self, x: torch.Tensor, latents: torch.Tensor, active_weight: torch.Tensor
     ) -> torch.Tensor:
-        # (batch * P, M, D): output projection, residual on LN(L), LayerNorm
-        projected = self.out_proj(compressed)
-        hidden = latents + projected
-        hidden = self.out_norm(hidden)
-        # feed-forward block
-        update = self.ffn(hidden)
-        hidden = hidden + update
-        hidden = hidden * active_weight
-        # (batch * P, M, D) -> (batch, P, M, D)
-        hidden = hidden.unflatten(0, [batch_size, n_patches])
-        # (batch, P, M, D) -> (batch, M, P, D)
-        hidden = self.latents_first(hidden)
-        return hidden.contiguous()
+        """The "output projection and a feed-forward block" of §2.3, for the
+        attended values of one chromophore.
+
+        Called once per chromophore: running both in one call would draw one
+        dropout mask for the two instead of one each.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            :math:`Z^s_p`, ``(batch * n_patches, n_latent_channels,
+            embed_dim)``.
+        latents : torch.Tensor
+            The normalised latent queries, same shape.
+        active_weight : torch.Tensor
+            ``(batch * n_patches, 1, 1)``, 1 for the patches that have a
+            valid channel and 0 for the others.
+
+        Returns
+        -------
+        torch.Tensor
+            Same shape as ``x``.
+        """
+        # Output projection W_O, residual on the latent queries, LayerNorm
+        # (batch * P, M, D)
+        x = self.out_proj(x)
+        x = latents + x
+        x = self.out_norm(x)
+
+        # Feed-forward block with its residual connection
+        update = self.ffn(x)
+        x = x + update
+
+        # A patch with no valid channel has no tokens
+        x = x * active_weight
+        return x
 
 
 class _ResidualProjectionBlock(nn.Module):
