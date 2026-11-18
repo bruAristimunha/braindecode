@@ -603,10 +603,11 @@ def _dance_signal_params() -> dict[str, Any]:
     }
 
 
-def _fnirs_chs_info(n_pairs: int) -> list[dict]:
+def _fnirs_chs_info(n_pairs: int, interleaved: bool = False) -> list[dict]:
     """Stacked HbO then HbR channels of ``n_pairs`` source-detector pairs 3 cm
     apart on an 8 cm ring (metres), named as MNE names them (``"S1_D1 hbo"``),
-    with the source and detector in ``loc[3:9]`` as MNE stores them."""
+    with the source and detector in ``loc[3:9]`` as MNE stores them;
+    ``interleaved=True`` gives MNE's ``[HbO_1, HbR_1, ...]`` order."""
     chs = []
     for kind in ("hbo", "hbr"):
         for i in range(n_pairs):
@@ -614,6 +615,8 @@ def _fnirs_chs_info(n_pairs: int) -> list[dict]:
             det = src + np.array([0.03, 0.0, 0.0])
             loc = np.concatenate([(src + det) / 2, src, det, np.zeros(3)])
             chs.append({"ch_name": f"S{i + 1}_D{i + 1} {kind}", "loc": loc})
+    if interleaved:
+        chs = [ch for pair in zip(chs[:n_pairs], chs[n_pairs:]) for ch in pair]
     return chs
 
 

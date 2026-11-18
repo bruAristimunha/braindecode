@@ -404,23 +404,21 @@ def test_warn_if_sfreq_differs_warns():
         warn_if_sfreq_differs("M", 250, 200)
 
 
-# pair-aware fNIRS models: chs_info sets their channel_order
+# the other pair-aware fNIRS models (FNIRS4D is tested directly): chs_info sets
+# their channel_order
 _FNIRS_PAIRING: dict[str, dict] = {
-    "FNIRS4D": {},
     "FNIRSPreT": dict(depth=1),
     "FNIRST": dict(depth=1),
     "JungMAE": dict(depth=1),
 }
 
 
-def _interleave(chs):  # stacked [HbO..., HbR...] -> MNE's [HbO_1, HbR_1, ...]
-    n = len(chs) // 2
-    return [ch for pair in zip(chs[:n], chs[n:]) for ch in pair]
-
-
 def test_fnirs_channel_order_reads_chs_info():
     stacked = _fnirs_chs_info(2)
-    chs = _interleave(stacked)
+    chs = _fnirs_chs_info(2, interleaved=True)
+    assert [ch["ch_name"] for ch in chs] == [
+        "S1_D1 hbo", "S1_D1 hbr", "S2_D2 hbo", "S2_D2 hbr"
+    ]
     assert fnirs_chromophores_from_chs_info(chs) == ["hbo", "hbr"] * 2
     assert fnirs_channel_order(chs) == "interleaved"
     assert fnirs_channel_order(stacked) == "stacked"
@@ -435,10 +433,21 @@ def test_fnirs_channel_order_reads_chs_info():
     info = mne.create_info(["a x", "a y", "b x", "b y"], 10.0, ["hbo", "hbr"] * 2)
     assert fnirs_channel_order(info["chs"]) == "interleaved"
     assert fnirs_chromophores_from_chs_info([{"ch_name": "hboost_1"}]) == ["unknown"]
+    # ... even when the name suffix says the other chromophore
+    info = mne.create_info(["S1_D1 hbr", "S1_D1 hbo"], 10.0, ["hbo", "hbr"])
+    assert fnirs_chromophores_from_chs_info(info["chs"]) == ["hbo", "hbr"]
+    # without a coil type: the string "kind", and a case-insensitive suffix
+    kinds = [{"ch_name": "a", "kind": "hbo"}, {"ch_name": "b", "kind": "HbR"}]
+    assert fnirs_chromophores_from_chs_info(kinds) == ["hbo", "hbr"]
+    names = [{"ch_name": "S1_D1 HbO"}, {"ch_name": "S1_D1 HBR"}]
+    assert fnirs_chromophores_from_chs_info(names) == ["hbo", "hbr"]
+    # the second half must be HbR, not a second copy of HbO
+    with pytest.raises(ValueError, match="paired HbO/HbR"):
+        fnirs_channel_order([{"ch_name": "a hbo"}, {"ch_name": "a hbo"}])
 
 
 def test_fnirs_split_hbo_hbr_follows_chs_info():
-    for chs in (_fnirs_chs_info(3), _interleave(_fnirs_chs_info(3))):
+    for chs in (_fnirs_chs_info(3), _fnirs_chs_info(3, interleaved=True)):
         names = [ch["ch_name"] for ch in chs]
         index = torch.arange(len(chs)).view(1, -1, 1)  # (batch, n_chans, n_times)
         hbo, hbr = fnirs_split_hbo_hbr(index, fnirs_channel_order(chs))
@@ -448,11 +457,9 @@ def test_fnirs_split_hbo_hbr_follows_chs_info():
         fnirs_split_hbo_hbr(index, "interleave")
 
 
-@pytest.mark.parametrize("name", sorted(_FNIRS_PAIRING))
-def test_fnirs_interleaved_input_matches_stacked(name):
+def _assert_interleaved_input_matches_stacked(cls, kw):
     """With the same weights, the interleaved model on MNE-ordered channels
     gives the stacked model's output on the stacked channels."""
-    cls, kw = getattr(models, name), _FNIRS_PAIRING[name]
     stacked = cls(n_chans=8, n_outputs=2, n_times=60, channel_order="stacked", **kw)
     interleaved = cls(
         n_chans=8, n_outputs=2, n_times=60, channel_order="interleaved", **kw
@@ -462,6 +469,17 @@ def test_fnirs_interleaved_input_matches_stacked(name):
     x_mne = x.reshape(3, 2, 4, 60).transpose(1, 2).reshape(3, 8, 60)
     with torch.no_grad():
         assert torch.equal(interleaved.eval()(x_mne), stacked.eval()(x))
+
+
+def test_fnirs4d_interleaved_input_matches_stacked():
+    _assert_interleaved_input_matches_stacked(models.FNIRS4D, {})
+
+
+@pytest.mark.parametrize("name", sorted(_FNIRS_PAIRING))
+def test_fnirs_interleaved_input_matches_stacked(name):
+    _assert_interleaved_input_matches_stacked(
+        getattr(models, name), _FNIRS_PAIRING[name]
+    )
 
 
 def test_fnirs4d_hbt_is_hbo_plus_hbr():
@@ -493,6 +511,8 @@ def test_fnirs_chs_info_without_hbo_hbr_pairs_raises(names, types):
     chs = mne.create_info(names, 10.0, types)["chs"]
     with pytest.raises(ValueError, match="paired HbO/HbR"):
         fnirs_channel_order(chs)
+    with pytest.raises(ValueError, match="paired HbO/HbR"):
+        models.FNIRS4D(chs_info=chs, n_outputs=2, n_times=60)
     for name, kw in _FNIRS_PAIRING.items():
         with pytest.raises(ValueError, match="paired HbO/HbR"):
             getattr(models, name)(chs_info=chs, n_outputs=2, n_times=60, **kw)
@@ -501,7 +521,11 @@ def test_fnirs_chs_info_without_hbo_hbr_pairs_raises(names, types):
 def test_fnirs_odd_n_chans_raises_for_pairs():
     with pytest.raises(ValueError, match="compute_hbt"):
         models.FNIRS4D(n_chans=5, n_outputs=2, n_times=60)
-    models.FNIRS4D(n_chans=5, n_outputs=2, n_times=60, compute_hbt=False)
+    with pytest.raises(ValueError, match="even n_chans"):  # multiscale: n_chans // 2
+        models.FNIRS4D(n_chans=5, n_outputs=2, n_times=60, compute_hbt=False)
+    models.FNIRS4D(
+        n_chans=5, n_outputs=2, n_times=60, compute_hbt=False, mean_branch="time_mean"
+    )
     for cls in (models.FNIRST, models.FNIRSPreT):
         for n_chromophores in (2, 3):
             with pytest.raises(ValueError, match="n_chromophores"):
@@ -509,11 +533,10 @@ def test_fnirs_odd_n_chans_raises_for_pairs():
         cls(n_chans=5, n_outputs=2, n_times=60, n_chromophores=1, depth=1)
 
 
-@pytest.mark.parametrize("name", sorted(_FNIRS_PAIRING))
-def test_fnirs_model_reads_channel_order_from_chs_info(name):
-    cls, kw = getattr(models, name), _FNIRS_PAIRING[name]
+def _assert_reads_channel_order_from_chs_info(cls, kw):
     torch.manual_seed(0)
-    inferred = cls(chs_info=_interleave(_fnirs_chs_info(2)), n_outputs=2, n_times=60, **kw)
+    chs = _fnirs_chs_info(2, interleaved=True)
+    inferred = cls(chs_info=chs, n_outputs=2, n_times=60, **kw)
     torch.manual_seed(0)
     explicit = cls(
         n_chans=4, n_outputs=2, n_times=60, channel_order="interleaved", **kw
@@ -522,6 +545,17 @@ def test_fnirs_model_reads_channel_order_from_chs_info(name):
     assert torch.equal(inferred.eval()(x), explicit.eval()(x))
     with pytest.raises(ValueError, match="ch_mask"):
         inferred(x, ch_mask=torch.ones(2, 4, dtype=torch.bool))
+
+
+def test_fnirs4d_reads_channel_order_from_chs_info():
+    _assert_reads_channel_order_from_chs_info(models.FNIRS4D, {})
+
+
+@pytest.mark.parametrize("name", sorted(_FNIRS_PAIRING))
+def test_fnirs_model_reads_channel_order_from_chs_info(name):
+    _assert_reads_channel_order_from_chs_info(
+        getattr(models, name), _FNIRS_PAIRING[name]
+    )
 
 
 @pytest.mark.parametrize(
@@ -533,6 +567,6 @@ def test_fnirs_model_reads_channel_order_from_chs_info(name):
     ],
 )
 def test_fnirs_model_without_pairs_ignores_channel_layout(name, kw):
-    chs = _interleave(_fnirs_chs_info(2))
+    chs = _fnirs_chs_info(2, interleaved=True)
     chs = [chs[1], chs[0], chs[2], chs[3]]  # balanced, in neither layout
     getattr(models, name)(chs_info=chs, n_outputs=2, n_times=60, **kw)
