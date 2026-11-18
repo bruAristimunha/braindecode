@@ -28,8 +28,22 @@ Current 2.1.0 (GitHub)
 Enhancements
 ============
 
-- Add the fNIRS task models :class:`braindecode.models.FNIRSNet` (Wang et al., IEEE TNSRE 2023); :class:`~braindecode.models.FNIRS4D` (Wang et al., IEEE TIM 2026), a diagonal state-space backbone with the authors' LOSO-CV or KFold-CV mean-hemoglobin branch (``mean_branch``); and :class:`~braindecode.models.FNIRST` and :class:`~braindecode.models.FNIRSPreT` (fNIRS-T and fNIRS-PreT, Wang et al., IEEE JBHI 2022), for ``(batch, n_chans, n_times)`` HbO/HbR windows. The ``mapping`` of FNIRSNet and FNIRS4D loads the authors' state dicts. HbO/HbR pairs are read from ``chs_info`` (stacked, or MNE's interleaved order), and a ``chs_info`` without matching HbO/HbR pairs raises a ``ValueError``. Each model mixes every channel, so all refuse ``ch_mask``; FNIRST and FNIRSPreT take an opt-in ``mask`` that hides raw samples. :class:`~braindecode.modules.MultiHeadAttention` gains ``qkv_bias`` (default ``True``, unchanged) for fNIRS-T's bias-free q/k/v, and ``fNIRS`` joins the modality vocabulary of the models table (:gh:`1563` by `Bruno Aristimunha`_).
-- Add fNIRS foundation models: :class:`braindecode.models.GeoNIRS` (Li et al., 2026), which compresses paired HbO/HbR channels onto latent cortical sources with a cross-attention conditioned on the 6D source-detector geometry; :class:`~braindecode.models.MtReNIRS` (Chae et al., 2026), which encodes per-channel windows with a Fourier embedding of position and chromophore and a QK-norm rotary Transformer, and leaves channels without a location out as the reference does; and :class:`~braindecode.models.JungMAE`, the GeoNIRS authors' implementation of the masked autoencoder of Jung et al. (BCI 2025), a dual-chromophore encoder with a linear head. Their ``load_state_dict`` takes the official ``geonirs_base.pt``/``geonirs_large.pt``, ``mtrenirs_10s.pt`` and GeoNIRS ``jung_mae.pt`` checkpoints as released, and their docstrings give the input those weights expect. GeoNIRS and JungMAE read HbO/HbR pairs from ``chs_info``; a window that is not a whole number of patches is handled as by each reference (``on_non_divisible``). GeoNIRS and MtReNIRS read the channel geometry from ``chs_info`` or the ``geometry``/``coordinates`` argument of ``forward`` and accept ``ch_mask`` (MtReNIRS with ``pool="channel_temporal_mean"``); JungMAE refuses ``ch_mask`` with a ``ValueError`` and takes an opt-in ``mask`` of missing samples (:gh:`1564` by `Bruno Aristimunha`_).
+- Add :class:`braindecode.models.FNIRSNet` (Wang et al., IEEE TNSRE 2023), the first
+  fNIRS model of braindecode: a delayed-hemodynamic-response convolution and a
+  depthwise-separable convolution over ``(batch, n_chans, n_times)`` HbO/HbR windows.
+  Its ``mapping`` loads the authors' state dict, and ``fNIRS`` joins the modality
+  vocabulary of the models table (:gh:`1579` by `Bruno Aristimunha`_).
+- Add :class:`braindecode.models.FNIRS4D` (Wang et al., IEEE TIM 2026), a diagonal
+  state-space (S4D) backbone with the authors' LOSO-CV or KFold-CV
+  mean-hemoglobin branch (``mean_branch``); its ``mapping`` loads the authors' state
+  dict. The helpers ``fnirs_chromophores_from_chs_info``, ``fnirs_channel_order`` and
+  ``fnirs_split_hbo_hbr`` of ``braindecode.models.util`` read HbO/HbR pairs from
+  ``chs_info``, stacked or in MNE's interleaved order (:gh:`1582` by
+  `Bruno Aristimunha`_).
+- :class:`braindecode.models.CodeBrain` compiles with ``torch.compile`` into one graph: its lazy
+  kernel-norm initialisation no longer reads a tensor's value on every forward (19 graph breaks
+  and 21 compiled graphs for two training steps before, on every device). Checkpoints and
+  outputs are unchanged (:gh:`1578` by `Bruno Aristimunha`_).
 - :func:`braindecode.functional.masked_group_norm` groups the channels with a view and
   counts the real entries from the mask, without a permute or a full-size masked count:
   same outputs and gradients, 28-38% less time forward and backward at CBraMod and
