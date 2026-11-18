@@ -73,13 +73,13 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
     so an authors' ``state_dict`` loads after a conversion, not a ``mapping``:
     ``to_qkv`` split into ``queries``/``keys``/``values``, tables cut,
     ``mlp_head.{0,1}`` to ``final_norm``/``final_layer``. The port then
-    matches the authors' model to float32 rounding (max-abs <= 3.3e-07).
-    The attention always projects its output (the authors skip it when
-    ``num_heads=1`` and ``head_dim=embed_dim``). ``n_chromophores=1``, the
-    clamp of ``spatial_kernel_size`` and ``mask`` are additions of the port;
-    ``ch_mask`` is refused, as every layer spans the whole montage.
+    matches the authors' model to float32 rounding (max-abs below 1e-6 on
+    their dataset A, B and C configurations). The attention always projects
+    its output (the authors skip it when ``num_heads=1`` and
+    ``head_dim=embed_dim``). ``mask`` is an addition of the port; ``ch_mask``
+    is refused, as every layer spans the whole montage.
 
-    `License <https://github.com/wzhlearning/fNIRS-Transformer/blob/main/LICENSE>`_
+    `License <https://github.com/wzhlearning/fNIRS-Transformer/blob/6ebe987faacc5587e11e8bd0d1177b40ec3ccd8d/LICENSE>`_
 
     Parameters
     ----------
@@ -100,16 +100,13 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
     n_conv_filters : int, default=8
         :math:`C_S = C_C`, feature maps of both convolutions (authors: 8).
     spatial_kernel_size : int, default=5
-        Height of :math:`\mathrm{Conv}_S` in channels (authors: 5), clamped to
-        the number of channels.
+        Height of :math:`\mathrm{Conv}_S` in HbO/HbR pairs (authors: 5); at
+        most the number of pairs, ``n_chans // 2``.
     temporal_kernel_size : int, default=30
         Temporal kernel of both convolutions, in samples (authors: 30);
         ``n_times`` must be at least this.
     temporal_stride : int, default=4
         Temporal stride of both convolutions, in samples (authors: 4).
-    n_chromophores : {1, 2}, default=2
-        :math:`C`. ``2`` (HbO/HbR, the authors' input) needs an even
-        ``n_chans``; ``1`` is an addition of the port.
     channel_order : {"stacked", "interleaved"} or None, default=None
         ``[HbO_1..HbO_H, HbR_1..HbR_H]`` or MNE's ``[HbO_1, HbR_1, ...]``;
         ``None`` reads it from ``chs_info``.
@@ -130,11 +127,13 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
     3rd-order Butterworth 0.01-0.1 Hz, ``filtfilt``), baseline-corrected and
     z-scored per window. Training: 5 x 5-fold cross-validation over pooled
     trials or leave-one-subject-out, 120 epochs, batch 128, AdamW, cosine
-    annealing (``T_max=30``), label smoothing 0.1 (k-fold), flooding (0.45,
-    0.40, 0.35 from epochs 1, 30, 50); the best test-fold accuracy is kept.
+    annealing (``T_max=30``), label smoothing 0.1 (k-fold), flooding on B
+    and C (0.45, 0.40, 0.35 from the zero-based epochs 0, 30, 50; none on
+    A); the best test-fold accuracy is kept.
 
-    Replication on dataset C with the authors' ``KFold_Train.py`` (seeds 0-2,
-    mean of the 25 runs; macro-F1 at the kept epoch):
+    Replication on dataset C with the authors' ``KFold_Train.py`` (mean of
+    the 25 runs of each seed, averaged over seeds 0-2; macro-F1 at the kept
+    epoch):
 
     ==========  =================  ================  ================
     Model       Paper (abstract)   Port (acc / F1)   Authors' code
@@ -169,7 +168,6 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
         spatial_kernel_size: int = 5,
         temporal_kernel_size: int = 30,
         temporal_stride: int = 4,
-        n_chromophores: int = 2,
         channel_order: Literal["stacked", "interleaved"] | None = None,
         drop_prob: float = 0.0,
         embed_drop_prob: float = 0.0,
@@ -188,26 +186,29 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
             raise ValueError(
                 f"n_times ({self.n_times}) must be >= temporal_kernel_size."
             )
-        if n_chromophores not in (1, 2) or self.n_chans % n_chromophores:
+        if self.n_chans % 2:  # the authors' input is [B, 2, pairs, samples]
             raise ValueError(
-                f"n_chromophores must be 1 or 2 and divide n_chans ({self.n_chans}), "
-                f"got {n_chromophores}."
+                f"{type(self).__name__} needs HbO/HbR pairs: n_chans must be even, "
+                f"got {self.n_chans}."
             )
-        pairs_info = self._chs_info if n_chromophores == 2 else None
-        order = fnirs_channel_order(pairs_info, channel_order)
+        if pool not in ("cls", "mean"):
+            raise ValueError(f"pool must be 'cls' or 'mean', got {pool!r}.")
+        order = fnirs_channel_order(self._chs_info, channel_order)
         channel_axes = "(chans chrom)" if order == "interleaved" else "(chrom chans)"
         self.to_chromophore_planes = Rearrange(
-            f"batch {channel_axes} time -> batch chrom chans time",
-            chrom=n_chromophores,
+            f"batch {channel_axes} time -> batch chrom chans time", chrom=2
         )
-        n_pairs = self.n_chans // n_chromophores
+        n_pairs = self.n_chans // 2
+        if spatial_kernel_size > n_pairs:  # the authors' Conv_S fails too
+            raise ValueError(
+                f"spatial_kernel_size ({spatial_kernel_size}) must be at most the "
+                f"number of HbO/HbR pairs ({n_pairs})."
+            )
         self.pool = pool
+        self._class_name = type(self).__name__  # named errors in a scripted forward
         n_bins = (self.n_times - temporal_kernel_size) // temporal_stride + 1
-        spatial_kernel = min(spatial_kernel_size, n_pairs)
         self.pre = (
-            _PreprocessingModule(self.n_times, n_chromophores)
-            if self._with_preprocessing
-            else None
+            _PreprocessingModule(self.n_times) if self._with_preprocessing else None
         )
 
         def branch() -> nn.Sequential:
@@ -229,9 +230,9 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
 
         self.to_patch_embedding = nn.Sequential(
             nn.Conv2d(
-                n_chromophores,
+                2,
                 n_conv_filters,
-                (spatial_kernel, temporal_kernel_size),
+                (spatial_kernel_size, temporal_kernel_size),
                 (1, temporal_stride),
             ),
             Rearrange("batch maps tokens bins -> batch tokens (maps bins)"),
@@ -240,14 +241,14 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
         )
         self.cls_token_patch = nn.Parameter(torch.empty(1, 1, embed_dim))
         self.pos_embedding_patch = nn.Parameter(
-            torch.empty(1, n_pairs - spatial_kernel + 2, embed_dim)
+            torch.empty(1, n_pairs - spatial_kernel_size + 2, embed_dim)
         )
         self.dropout_patch = nn.Dropout(embed_drop_prob)
         self.transformer_patch = branch()
 
         self.to_channel_embedding = nn.Sequential(
             nn.Conv2d(
-                n_chromophores,
+                2,
                 n_conv_filters,
                 (1, temporal_kernel_size),
                 (1, temporal_stride),
@@ -293,13 +294,15 @@ class FNIRST(EEGModuleMixin, nn.Module, license="mit"):
         gives the normalized pooled ``"features"`` and, as ``"cls_token"``, the
         two branches' class tokens ``(batch, 2 * embed_dim)``."""
         if ch_mask is not None:
-            raise ValueError("FNIRST does not accept ch_mask (fixed channel layout).")
+            raise ValueError(
+                self._class_name + " does not accept ch_mask (fixed channel layout)."
+            )
         if mask is not None:
             x = x.masked_fill(mask, 0.0)  # (batch, n_chans, n_times)
-        # (batch, n_chans, n_times) -> (batch, n_chromophores, n_pairs, n_times)
+        # (batch, n_chans, n_times) -> (batch, 2, n_pairs, n_times)
         x = self.to_chromophore_planes(x)
         if self.pre is not None:
-            x = self.pre(x)  # (batch, n_chromophores, n_pairs, n_times)
+            x = self.pre(x)  # (batch, 2, n_pairs, n_times)
         batch_size = x.shape[0]
         # spatial level, n_groups = n_pairs - spatial_kernel_size + 1 tokens
         patch = self.to_patch_embedding(x)  # (batch, n_groups, embed_dim)
@@ -373,10 +376,10 @@ class FNIRSPreT(FNIRST, license="mit"):  # the kwarg is not inherited
     :class:`~braindecode.models.FNIRST`. An authors' ``fNIRS_PreT``
     ``state_dict`` loads after FNIRST's conversion, with the ``fNIRS_T.``
     prefix removed and ``pre.ln_i`` renamed ``pre.norms.i``; the port and the
-    authors' model then agree to float32 rounding (max-abs at most 3.3e-07
-    for the dataset A, B and C configurations).
+    authors' model then agree to float32 rounding (max-abs below 1e-6 on the
+    dataset A, B and C configurations).
 
-    `License <https://github.com/wzhlearning/fNIRS-Transformer/blob/main/LICENSE>`_
+    `License <https://github.com/wzhlearning/fNIRS-Transformer/blob/6ebe987faacc5587e11e8bd0d1177b40ec3ccd8d/LICENSE>`_
 
     Notes
     -----
@@ -385,15 +388,13 @@ class FNIRSPreT(FNIRST, license="mit"):  # the kwarg is not inherited
     disable the filtering and baseline correction of ``B_mat2xls.m`` and
     ``C_mat2xls.m`` by hand for fNIRS-PreT, and ``Load_Dataset_A`` skips the
     dataset A filters for ``model='fNIRS-PreT'``. The flooding levels are
-    those of fNIRS-T except on dataset B (0.40, 0.38 and 0.35 from epochs 1,
-    30 and 50).
+    those of fNIRS-T except on dataset B (0.40, 0.38 and 0.35 from the
+    zero-based epochs 0, 30 and 50).
 
-    The abstract gives no fNIRS-PreT accuracy. In the authors'
-    ``KFold_Train.py`` on dataset C (5 x 5-fold, seeds 0, 1 and 2, the metric
-    of :class:`~braindecode.models.FNIRST`), the port reaches 72.50 %
-    accuracy (macro-F1 0.7244) and the authors' model 72.50 % (0.7245). Both
-    received the band-pass filtered, baseline-corrected windows of fNIRS-T:
-    the released ``Load_Dataset_C`` has no raw-data path.
+    The abstract gives no fNIRS-PreT accuracy. The dataset C replication is
+    the fNIRS-PreT row of the table of :class:`~braindecode.models.FNIRST`.
+    Both sides received the band-pass filtered, baseline-corrected windows of
+    fNIRS-T there, as the released ``Load_Dataset_C`` has no raw-data path.
 
     References
     ----------
@@ -402,20 +403,68 @@ class FNIRSPreT(FNIRST, license="mit"):  # the kwarg is not inherited
 
     _with_preprocessing = True
 
+    # Its own __init__: with docstring inheritance on (docs/conf.py), a subclass
+    # sharing FNIRST.__init__ is given FNIRST's docstring.
+    def __init__(
+        self,
+        n_outputs: int | None = None,
+        n_chans: int | None = None,
+        chs_info: list[dict] | None = None,
+        n_times: int | None = None,
+        input_window_seconds: float | None = None,
+        sfreq: float | None = None,
+        *,
+        embed_dim: int = 64,
+        depth: int = 6,
+        num_heads: int = 8,
+        mlp_dim: int = 64,
+        pool: Literal["cls", "mean"] = "cls",
+        head_dim: int = 64,
+        n_conv_filters: int = 8,
+        spatial_kernel_size: int = 5,
+        temporal_kernel_size: int = 30,
+        temporal_stride: int = 4,
+        channel_order: Literal["stacked", "interleaved"] | None = None,
+        drop_prob: float = 0.0,
+        embed_drop_prob: float = 0.0,
+        activation: type[nn.Module] = nn.GELU,
+    ) -> None:
+        super().__init__(
+            n_outputs=n_outputs,
+            n_chans=n_chans,
+            chs_info=chs_info,
+            n_times=n_times,
+            input_window_seconds=input_window_seconds,
+            sfreq=sfreq,
+            embed_dim=embed_dim,
+            depth=depth,
+            num_heads=num_heads,
+            mlp_dim=mlp_dim,
+            pool=pool,
+            head_dim=head_dim,
+            n_conv_filters=n_conv_filters,
+            spatial_kernel_size=spatial_kernel_size,
+            temporal_kernel_size=temporal_kernel_size,
+            temporal_stride=temporal_stride,
+            channel_order=channel_order,
+            drop_prob=drop_prob,
+            embed_drop_prob=embed_drop_prob,
+            activation=activation,
+        )
+
 
 class _PreprocessingModule(nn.Module):
-    """The authors' preprocessing module: moving averages, then LayerNorm over time."""
+    """The authors' preprocessing module: moving averages, then a LayerNorm
+    over time for HbO (``norms.0``) and one for HbR (``norms.1``)."""
 
-    def __init__(self, n_times: int, n_chromophores: int) -> None:
+    def __init__(self, n_times: int) -> None:
         super().__init__()
         self.average_pooling = nn.Sequential(  # "same" padding
             nn.AvgPool1d(5, stride=1, padding=2),
             nn.AvgPool1d(13, stride=1, padding=6),
             nn.AvgPool1d(7, stride=1, padding=3),
         )
-        self.norms = nn.ModuleList(
-            [nn.LayerNorm(n_times) for _ in range(n_chromophores)]
-        )
+        self.norms = nn.ModuleList([nn.LayerNorm(n_times) for _ in range(2)])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         planes = []
@@ -424,5 +473,5 @@ class _PreprocessingModule(nn.Module):
             plane = self.average_pooling(plane)  # (batch, n_pairs, n_times)
             plane = norm(plane)  # (batch, n_pairs, n_times)
             planes.append(plane)
-        # (batch, n_chromophores, n_pairs, n_times)
+        # (batch, 2, n_pairs, n_times)
         return torch.stack(planes, dim=1)

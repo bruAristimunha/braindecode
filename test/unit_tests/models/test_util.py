@@ -405,10 +405,11 @@ def test_warn_if_sfreq_differs_warns():
 
 
 # the other pair-aware fNIRS models (FNIRS4D is tested directly): chs_info sets
-# their channel_order
+# their channel_order. The layouts below have 2 or 4 pairs, fewer than FNIRST's
+# default spatial kernel of 5 pairs.
 _FNIRS_PAIRING: dict[str, dict] = {
-    "FNIRSPreT": dict(depth=1),
-    "FNIRST": dict(depth=1),
+    "FNIRSPreT": dict(depth=1, spatial_kernel_size=2),
+    "FNIRST": dict(depth=1, spatial_kernel_size=2),
     "JungMAE": dict(depth=1),
 }
 
@@ -527,10 +528,8 @@ def test_fnirs_odd_n_chans_raises_for_pairs():
         n_chans=5, n_outputs=2, n_times=60, compute_hbt=False, mean_branch="time_mean"
     )
     for cls in (models.FNIRST, models.FNIRSPreT):
-        for n_chromophores in (2, 3):
-            with pytest.raises(ValueError, match="n_chromophores"):
-                cls(n_chans=5, n_outputs=2, n_times=60, n_chromophores=n_chromophores)
-        cls(n_chans=5, n_outputs=2, n_times=60, n_chromophores=1, depth=1)
+        with pytest.raises(ValueError, match=f"{cls.__name__} needs HbO/HbR pairs"):
+            cls(n_chans=11, n_outputs=2, n_times=60, depth=1)
 
 
 def _assert_reads_channel_order_from_chs_info(cls, kw):
@@ -563,7 +562,6 @@ def test_fnirs_model_reads_channel_order_from_chs_info(name):
     [
         ("FNIRSNet", {}),
         ("FNIRS4D", dict(compute_hbt=False)),
-        ("FNIRST", dict(n_chromophores=1, depth=1)),
     ],
 )
 def test_fnirs_model_without_pairs_ignores_channel_layout(name, kw):

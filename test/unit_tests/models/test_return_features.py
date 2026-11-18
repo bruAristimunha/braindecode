@@ -251,8 +251,8 @@ _MODELS = [
     ),
     pytest.param(FNIRSNet, 4, {}, False, id="FNIRSNet"),
     pytest.param(FNIRS4D, 4, {"n_layers": 1, "d_state": 16}, False, id="FNIRS4D"),
-    pytest.param(FNIRST, 4, {"depth": 1, "num_heads": 2}, True, id="FNIRST"),
-    pytest.param(FNIRSPreT, 4, {"depth": 1, "num_heads": 2}, True, id="FNIRSPreT"),
+    pytest.param(FNIRST, 10, {"depth": 1, "num_heads": 2}, True, id="FNIRST"),
+    pytest.param(FNIRSPreT, 10, {"depth": 1, "num_heads": 2}, True, id="FNIRSPreT"),
     pytest.param(
         JungMAE,
         4,
