@@ -280,13 +280,15 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
 
     def __init__(
         self,
+        # Braindecode parameters
         n_outputs: int | None = None,
         n_chans: int | None = None,
-        chs_info=None,
+        chs_info: list[dict] | None = None,
         n_times: int | None = None,
         input_window_seconds: float | None = None,
         sfreq: float | None = None,
         *,
+        # Model-specific parameters
         patch_size: int = 10,
         max_patches: int = 15,
         on_non_divisible: Literal["error", "pad", "crop"] = "error",
@@ -316,86 +318,198 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
             sfreq=sfreq,
         )
         del n_outputs, n_chans, chs_info, n_times, input_window_seconds, sfreq
+
+        # Parameters
+        self.patch_size = patch_size
+        self.on_non_divisible = on_non_divisible
+        self.embed_dim = embed_dim
+        self.n_latent_channels = n_latent_channels
+        self.feature_dim = feature_dim
+        self.pool = pool
+        # ``None`` takes the value of the temporal encoders, as in both
+        # checkpoints
+        self.geometry_hidden_dim = geometry_hidden_dim or embed_dim
+        self.geometry_heads = geometry_heads or num_heads
+        self.compressor_heads = compressor_heads or num_heads
+        # Measured samples a patch needs to be valid ("at least 80% of its
+        # time points", Appendix B.1.2): 8 of 10 with the defaults
+        self.min_valid_samples = math.ceil(
+            patch_size * float(minimum_patch_valid_fraction)
+        )
+
+        # Checkers
+        # The rows are HbO/HbR pairs of the same source-detector channels
         if self.n_chans % 2:
             raise ValueError("GeoNIRS needs HbO/HbR pairs: n_chans must be even.")
         if pool not in ("flatten", "mean_std"):
             raise ValueError(f"pool must be 'flatten' or 'mean_std', got {pool!r}.")
+        # Where the HbO and HbR rows are (stacked or interleaved); raises when
+        # chs_info does not list HbO/HbR pairs
         self.channel_order = fnirs_channel_order(self._chs_info, channel_order)
         _check_on_non_divisible(on_non_divisible)
-        self.on_non_divisible = on_non_divisible
-        self.patch_size = patch_size
+        # P, the patches of one window; raises for a window the patches do not
+        # tile when on_non_divisible="error"
         self.n_patches = patch_count(self.n_times, patch_size, on_non_divisible)
-        self.min_valid_samples = math.ceil(
-            patch_size * float(minimum_patch_valid_fraction)
-        )
-        self.n_latent_channels = n_latent_channels
-        self.pool = pool
 
-        temporal_encoder = dict(
-            patch_size=patch_size,
+        # Layers
+        # Following paper nomenclature
+
+        # Temporal encoders (§2.2): "Separate HbO and HbR temporal encoders
+        # then model the token sequence within each physical channel", giving
+        # H^O and H^R. The positional embedding needs a row per patch of the
+        # window, so it grows past ``max_patches`` for a longer window.
+        self.hbo_encoder = _TemporalEncoder(
+            patch_size=self.patch_size,
             max_patches=max(max_patches, self.n_patches),
-            embed_dim=embed_dim,
+            embed_dim=self.embed_dim,
             num_heads=num_heads,
             depth=depth,
             mlp_ratio=mlp_ratio,
             drop_prob=drop_prob,
             activation=activation,
         )
-        self.hbo_encoder = _TemporalEncoder(**temporal_encoder)
-        self.hbr_encoder = _TemporalEncoder(**temporal_encoder)
-        self.geometry_encoder = None
-        if use_channel_geometry:
-            self.geometry_encoder = _GeometryEncoder(
-                embed_dim=embed_dim,
-                hidden_dim=geometry_hidden_dim or embed_dim,
-                num_heads=geometry_heads or num_heads,
-                drop_prob=drop_prob,
-                activation=activation,
-            )
-        self.channel_compressor = _ChannelCompressorAttention(
-            embed_dim=embed_dim,
-            n_latent_channels=n_latent_channels,
-            num_heads=compressor_heads or num_heads,
+        self.hbr_encoder = _TemporalEncoder(
+            patch_size=self.patch_size,
+            max_patches=max(max_patches, self.n_patches),
+            embed_dim=self.embed_dim,
+            num_heads=num_heads,
+            depth=depth,
+            mlp_ratio=mlp_ratio,
             drop_prob=drop_prob,
             activation=activation,
         )
+
+        # Geometry encoder (Appendix B.2): the source-detector geometry g_c of
+        # each channel becomes G, "a shared spatial reference across
+        # heterogeneous probe layouts". The "w/o Geometry" variant (Table 4)
+        # has none.
+        self.geometry_encoder = None
+        if use_channel_geometry:
+            self.geometry_encoder = _GeometryEncoder(
+                embed_dim=self.embed_dim,
+                hidden_dim=self.geometry_hidden_dim,
+                num_heads=self.geometry_heads,
+                drop_prob=drop_prob,
+                activation=activation,
+            )
+
+        # Geometry-aware channel compressor (§2.3): M latent queries map the
+        # C channels of a recording to M latent channels
+        self.channel_compressor = _ChannelCompressorAttention(
+            embed_dim=self.embed_dim,
+            n_latent_channels=self.n_latent_channels,
+            num_heads=self.compressor_heads,
+            drop_prob=drop_prob,
+            activation=activation,
+        )
+
+        # Chromophore projections Pi_O and Pi_R (§2.4): D -> F, giving Z^O
+        # and Z^R
         self.hbo_projection = _ChromophoreProjection(
-            embed_dim, feature_dim, drop_prob, activation
+            embed_dim=self.embed_dim,
+            feature_dim=self.feature_dim,
+            drop_prob=drop_prob,
+            activation=activation,
         )
         self.hbr_projection = _ChromophoreProjection(
-            embed_dim, feature_dim, drop_prob, activation
+            embed_dim=self.embed_dim,
+            feature_dim=self.feature_dim,
+            drop_prob=drop_prob,
+            activation=activation,
         )
+
+        # Geometry g_c of the pairs of chs_info (Eqs. 4-5), used when forward
+        # gets no ``geometry``. Derived from chs_info, so not saved with the
+        # weights.
         self.register_buffer(
             "default_geometry",
             torch.from_numpy(_optode_geometry(self._chs_info, self.channel_order)),
             persistent=False,
         )
+
+        # Validity masks: the time axis of the sample mask is cut in patches,
+        # and the masks get the axes they are broadcast over
         self.split_patches = Rearrange(
             "batch pairs (patches samples) -> batch pairs patches samples",
-            samples=patch_size,
+            samples=self.patch_size,
         )
         self.pair_over_time = Rearrange("batch pairs -> batch pairs 1")
         self.patch_over_latents = Rearrange("batch patches -> batch 1 patches")
         self.patch_over_features = Rearrange("batch patches -> batch 1 patches 1")
+
+        # Read-out of the (batch, 2, M, P, F) tokens. "flatten": every token,
+        # the head of the paper (Appendix B.5.2). "mean_std": mean and
+        # standard deviation over the valid patches.
         self.flatten_foundation = Rearrange(
             "batch chrom latents patches dim -> batch (chrom latents patches dim)"
         )
-        self.join_chromophores = Rearrange(
-            "batch chrom latents patches dim -> batch latents patches (chrom dim)"
-        )
-        self.valid_over_features = Rearrange(
-            "batch latents patches -> batch latents patches 1"
-        )
-        self.mean_over_patches = Rearrange("batch latents dim -> batch latents 1 dim")
-        self.flatten_statistics = Rearrange(
-            "stat batch latents dim -> batch (latents stat dim)"
-        )
-        n_features = {
-            "flatten": 2 * n_latent_channels * self.n_patches * feature_dim,
-            "mean_std": 4 * n_latent_channels * feature_dim,
-        }[pool]
+        self.mean_std = _ValidMeanStd()
+        if self.pool == "flatten":
+            n_features = 2 * n_latent_channels * self.n_patches * feature_dim
+        else:
+            n_features = 4 * n_latent_channels * feature_dim
+
+        # Head (Appendix B.5.2): "dropout (p = 0.1) and a single linear
+        # classification layer"
         self.head_dropout = nn.Dropout(head_drop_prob)
         self.final_layer = nn.Linear(n_features, self.n_outputs)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        return_features: bool = False,
+        geometry: Optional[torch.Tensor] = None,
+        ch_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor | dict[str, torch.Tensor | None]:
+        """Forward pass.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            HbO/HbR signals of shape ``(batch, n_chans, n_times)``. A NaN
+            marks a missing sample.
+        return_features : bool, default=False
+            Return the features the head reads instead of the outputs.
+        geometry : torch.Tensor, optional
+            Geometry vector of each pair, ``(n_pairs, 6)`` or ``(batch,
+            n_pairs, 6)``; see :meth:`encode`.
+        ch_mask : torch.Tensor, optional
+            ``(batch, n_chans)`` mask of the real channels of a padded batch;
+            see :meth:`encode`.
+
+        Returns
+        -------
+        torch.Tensor or dict
+            Outputs of shape ``(batch, n_outputs)``. With
+            ``return_features=True``, ``{"features": Tensor, "cls_token":
+            None}`` with the ``(batch, n_features)`` input of ``final_layer``.
+        """
+        # Backbone of the paper (§2.2-2.4): temporal encoders, geometry
+        # encoder, channel compressor and chromophore projections
+        # (batch, n_chans, n_times) -> (batch, 2, M, P, F): Z^O and Z^R
+        encoded = self.encode(x, geometry=geometry, ch_mask=ch_mask)
+        x = encoded["foundation"]
+
+        if self.pool == "flatten":
+            # Read-out of the paper: the representation "is flattened"
+            # (Appendix B.5.2)
+            # (batch, 2, M, P, F) -> (batch, 2 * M * P * F)
+            x = self.flatten_foundation(x)
+        else:
+            # Mean and standard deviation of [Z^O | Z^R] over the valid
+            # patches of each latent channel
+            # (batch, 2, M, P, F) -> (batch, 4 * M * F)
+            x = self.mean_std(x, encoded["valid"])
+
+        # Head (Appendix B.5.2): "dropout (p = 0.1) and a single linear
+        # classification layer"
+        x = self.head_dropout(x)
+        if return_features:
+            return {"features": x, "cls_token": None}
+
+        # (batch, n_features) -> (batch, n_outputs)
+        x = self.final_layer(x)
+        return x
 
     def encode(
         self,
@@ -403,44 +517,86 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
         geometry: Optional[torch.Tensor] = None,
         ch_mask: Optional[torch.Tensor] = None,
     ) -> dict[str, torch.Tensor]:
-        """``(batch, n_chans, n_times)`` -> ``"foundation"``
-        ``(batch, 2, M, P, feature_dim)`` (:math:`Z^O, Z^R`) and its
-        validity ``"valid"`` ``(batch, M, P)``. ``geometry`` is
-        ``(n_pairs, 6)`` or ``(batch, n_pairs, 6)``; ``ch_mask``
-        ``(batch, n_pairs)`` flags real pairs.
+        """Encode a window into the latent tokens of the two chromophores.
+
+        The backbone of the paper: temporal encoders, geometry encoder,
+        channel compressor and chromophore projections.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            HbO/HbR signals of shape ``(batch, n_chans, n_times)``. A NaN
+            marks a missing sample.
+        geometry : torch.Tensor, optional
+            Geometry vector :math:`g_c` of each pair, ``(n_pairs, 6)`` or
+            ``(batch, n_pairs, 6)``. ``None`` takes the one of ``chs_info``.
+            Not read with ``use_channel_geometry=False``.
+        ch_mask : torch.Tensor, optional
+            ``(batch, n_chans)`` mask of the real channels of a padded batch;
+            it must pad whole HbO/HbR pairs.
+
+        Returns
+        -------
+        dict of torch.Tensor
+            ``"foundation"``: :math:`Z^O` and :math:`Z^R`, ``(batch, 2,
+            n_latent_channels, n_patches, feature_dim)``. ``"valid"``:
+            boolean ``(batch, n_latent_channels, n_patches)``, ``False`` for
+            the patches that have no valid channel (their tokens are zero).
         """
+        # Padded channels of the batch, as pairs: both chromophores of a
+        # padded pair must be flagged
+        # (batch, n_chans) -> (batch, n_pairs)
+        pair_mask: Optional[torch.Tensor] = None
+        ch_mask = check_ch_mask(ch_mask, x)
+        if ch_mask is not None:
+            hbo_mask, hbr_mask = fnirs_split_hbo_hbr(ch_mask, self.channel_order)
+            if not torch.equal(hbo_mask, hbr_mask):
+                raise ValueError("ch_mask needs whole HbO/HbR pairs.")
+            pair_mask = hbo_mask
+
+        # The window is cut into P patches of S samples (§2.2)
         # (batch, n_chans, n_times) -> (batch, n_chans, P * S)
         x = pad_or_crop_to_patches(x, self.patch_size, self.on_non_divisible)
+
+        # Paired chromophore signals X^O and X^R of the C source-detector pairs
         # (batch, n_chans, P * S) -> 2 x (batch, n_pairs, P * S)
         hbo, hbr = fnirs_split_hbo_hbr(x, self.channel_order)
         batch_size, n_pairs, _ = hbo.shape
+
+        # Validity masks (§2.2). A sample is measured when both chromophores
+        # are finite; a pair is valid when it has a measured sample and is
+        # not padding.
         hbo_finite = torch.isfinite(hbo)
         hbr_finite = torch.isfinite(hbr)
-        # (batch, n_pairs, P * S): both chromophores finite
+        # (batch, n_pairs, P * S)
         finite = hbo_finite & hbr_finite
-        # (batch, n_pairs, P * S) -> (batch, n_pairs): a pair with a finite sample
+        # (batch, n_pairs)
         channel_valid = finite.any(dim=-1)
-        if ch_mask is not None:
-            ch_mask = ch_mask.to(torch.bool)
-            channel_valid = ch_mask & channel_valid
+        if pair_mask is not None:
+            channel_valid = pair_mask & channel_valid
         # (batch, n_pairs) -> (batch, n_pairs, 1)
         channel_valid_over_time = self.pair_over_time(channel_valid)
         # (batch, n_pairs, P * S)
         sample_valid = finite & channel_valid_over_time
+
+        # Missing samples are set to zero, as the reference does
         zeros = torch.zeros_like(hbo)
         hbo = torch.where(sample_valid, hbo, zeros)
         hbr = torch.where(sample_valid, hbr, zeros)
 
-        # (batch, n_pairs, P * S) -> (batch, n_pairs, P, S)
-        sample_valid_patches = self.split_patches(sample_valid)
-        # (batch, n_pairs, P, S) -> (batch, n_pairs, P)
-        n_valid_samples = sample_valid_patches.sum(dim=-1)
-        patch_valid = n_valid_samples >= self.min_valid_samples
+        # A patch is valid when enough of its samples are measured ("at least
+        # 80% of its time points", Appendix B.1.2)
+        # (batch, n_pairs, P * S) -> (batch, n_pairs, P, S) -> (batch, n_pairs, P)
+        patch_valid = self.split_patches(sample_valid)
+        patch_valid = patch_valid.sum(dim=-1)
+        patch_valid = patch_valid >= self.min_valid_samples
         patch_valid = patch_valid & channel_valid_over_time
 
+        # Geometry encoder (Appendix B.2): g_c of each pair -> G
         geometry_embedding: Optional[torch.Tensor] = None
         if self.geometry_encoder is not None:
             if geometry is None:
+                # the geometry of chs_info, shared by the whole batch
                 pair_geometry = self.default_geometry
                 if pair_geometry.numel() == 0:
                     raise ValueError(
@@ -465,107 +621,87 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
             pair_geometry = pair_geometry.expand(batch_size, -1, -1)
             # (batch, n_pairs, 6) -> (batch, n_pairs, D): G
             geometry_embedding = self.geometry_encoder(pair_geometry, channel_valid)
-        # (batch, n_pairs, P * S) -> (batch, n_pairs, P, D): H^O, H^R
-        temporal_hbo = self.hbo_encoder(hbo, patch_valid)
-        temporal_hbr = self.hbr_encoder(hbr, patch_valid)
-        # -> 2 x (batch, M, P, D)
-        latent_hbo, latent_hbr = self.channel_compressor(
-            temporal_hbo, temporal_hbr, geometry_embedding, patch_valid
-        )
-        # (batch, n_pairs, P) -> (batch, P): a patch with a valid pair
+
+        # Temporal encoders (§2.2), one per chromophore: the patches of each
+        # channel become the tokens H^O and H^R
+        # (batch, n_pairs, P * S) -> (batch, n_pairs, P, D)
+        hbo = self.hbo_encoder(hbo, patch_valid)
+        hbr = self.hbr_encoder(hbr, patch_valid)
+
+        # Geometry-aware channel compressor (§2.3): the C channels of each
+        # patch are compressed into M latent channels, with one attention map
+        # for both chromophores
+        # (batch, n_pairs, P, D) -> (batch, M, P, D)
+        hbo, hbr = self.channel_compressor(hbo, hbr, geometry_embedding, patch_valid)
+
+        # A patch is kept when at least one pair is valid in it
+        # (batch, n_pairs, P) -> (batch, P)
         time_valid = patch_valid.any(dim=1)
         # (batch, P) -> (batch, 1, P, 1)
         valid_scale = self.patch_over_features(time_valid)
-        valid_scale = valid_scale.to(latent_hbo.dtype)
-        # (batch, M, P, D) -> (batch, M, P, F): Z^O, Z^R
-        compact_hbo = self.hbo_projection(latent_hbo)
-        compact_hbo = compact_hbo * valid_scale
-        compact_hbr = self.hbr_projection(latent_hbr)
-        compact_hbr = compact_hbr * valid_scale
+        valid_scale = valid_scale.to(hbo.dtype)
+
+        # Chromophore projections Pi_O and Pi_R (§2.4): Z^O and Z^R, zero at
+        # the patches that are not kept
+        # (batch, M, P, D) -> (batch, M, P, F)
+        hbo = self.hbo_projection(hbo)
+        hbo = hbo * valid_scale
+        hbr = self.hbr_projection(hbr)
+        hbr = hbr * valid_scale
+
+        # The two chromophores side by side: the "base representation" of
+        # Table 6
         # 2 x (batch, M, P, F) -> (batch, 2, M, P, F)
-        foundation = torch.stack([compact_hbo, compact_hbr], dim=1)
+        foundation = torch.stack([hbo, hbr], dim=1)
+
+        # Validity of the tokens, the same for every latent channel
         # (batch, P) -> (batch, 1, P) -> (batch, M, P)
         valid = self.patch_over_latents(time_valid)
         valid = valid.expand(-1, self.n_latent_channels, -1)
         return {"foundation": foundation, "valid": valid}
 
     def reset_head(self, n_outputs: int) -> None:
+        """Replace ``final_layer`` by a new one with ``n_outputs`` outputs.
+
+        Parameters
+        ----------
+        n_outputs : int
+            New number of outputs.
+        """
         self._set_n_outputs(n_outputs)
+        # The read-out does not change, so the head keeps its input width
         n_features = self.final_layer.in_features
         self.final_layer = nn.Linear(n_features, self.n_outputs)
 
     def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
-        """Also takes an official checkpoint (``{"model": ...}``); its
-        pretraining decoders are dropped, a missing head keeps its init."""
+        """Load a state dict, or a checkpoint as the authors release it.
+
+        Parameters
+        ----------
+        state_dict : dict
+            A state dict of this class, or the released file's payload
+            (``{"model": ..., "config": ...}``).
+        strict : bool, default=True
+            As in :meth:`torch.nn.Module.load_state_dict`.
+        assign : bool, default=False
+            As in :meth:`torch.nn.Module.load_state_dict`.
+
+        Returns
+        -------
+        NamedTuple
+            The missing and unexpected keys.
+        """
+        # The released files keep the weights under "model"
         state_dict = state_dict.get("model", state_dict)
+        # The reconstruction decoders are pretraining-only (§2.5: "the
+        # reconstruction decoders are discarded")
         decoders = ("hbo_to_hbr_decoder.", "hbr_to_hbo_decoder.")
         cleaned = {k: v for k, v in state_dict.items() if not k.startswith(decoders)}
+        # A backbone checkpoint has no head: the head keeps its initialisation
         if not any(k.startswith("final_layer.") for k in cleaned):
             head = self.final_layer.state_dict(prefix="final_layer.")
             cleaned.update(head)
         return super().load_state_dict(cleaned, strict=strict, assign=assign)
-
-    def _valid_mean_std(
-        self, foundation: torch.Tensor, valid: torch.Tensor
-    ) -> torch.Tensor:
-        """Mean and standard deviation of :math:`[Z^O \\| Z^R]` over the valid
-        patches, as the reference ``valid_temporal_mean_std``."""
-        # (batch, 2, M, P, F) -> (batch, M, P, 2 F)
-        joint = self.join_chromophores(foundation)
-        # (batch, M, P) -> (batch, M, P, 1)
-        weight = self.valid_over_features(valid)
-        weight = weight.to(joint.dtype)
-        # (batch, M, P, 1) -> (batch, M, 1)
-        count = weight.sum(dim=2)
-        count = count.clamp_min(1.0)
-        # (batch, M, P, 2 F) -> (batch, M, 2 F)
-        weighted = joint * weight
-        total = weighted.sum(dim=2)
-        mean = total / count
-        # (batch, M, 2 F) -> (batch, M, 1, 2 F)
-        mean_over_patches = self.mean_over_patches(mean)
-        centred = joint - mean_over_patches
-        centred = centred * weight
-        squared = centred.square()
-        # (batch, M, P, 2 F) -> (batch, M, 2 F)
-        variance = squared.sum(dim=2)
-        variance = variance / count
-        variance = variance.clamp_min(0.0)
-        std = variance.sqrt()
-        # 2 x (batch, M, 2 F) -> (2, batch, M, 2 F)
-        statistics = torch.stack([mean, std])
-        # (2, batch, M, 2 F) -> (batch, M * 4 F)
-        return self.flatten_statistics(statistics)
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        return_features: bool = False,
-        geometry: Optional[torch.Tensor] = None,
-        ch_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor | dict[str, torch.Tensor | None]:
-        """``geometry`` as in :meth:`encode`; ``ch_mask`` ``(batch, n_chans)``
-        must pad whole HbO/HbR pairs, which every attention then leaves out."""
-        ch_mask = check_ch_mask(ch_mask, x)
-        if ch_mask is not None:
-            # (batch, n_chans) -> 2 x (batch, n_pairs)
-            hbo_mask, hbr_mask = fnirs_split_hbo_hbr(ch_mask, self.channel_order)
-            if not torch.equal(hbo_mask, hbr_mask):
-                raise ValueError("ch_mask needs whole HbO/HbR pairs.")
-            ch_mask = hbo_mask
-        encoded = self.encode(x, geometry=geometry, ch_mask=ch_mask)
-        # (batch, 2, M, P, F)
-        foundation = encoded["foundation"]
-        if self.pool == "flatten":
-            # (batch, 2, M, P, F) -> (batch, 2 * M * P * F)
-            features = self.flatten_foundation(foundation)
-        else:
-            # (batch, 2, M, P, F) -> (batch, M * 4 F)
-            features = self._valid_mean_std(foundation, encoded["valid"])
-        features = self.head_dropout(features)
-        if return_features:
-            return {"features": features, "cls_token": None}
-        return self.final_layer(features)
 
 
 class _TemporalEncoder(nn.Module):
@@ -1242,6 +1378,87 @@ class _ResidualProjectionBlock(nn.Module):
         update = self.residual_scale * update
         # (..., output_dim)
         x = skip + update
+        return x
+
+
+class _ValidMeanStd(nn.Module):
+    r"""Read-out ``pool="mean_std"``: mean and standard deviation of
+    :math:`Z^{\mathrm{joint}} = [Z^O \,\|\, Z^R]` (paper §2.5) over the valid
+    patches of each latent channel.
+
+    The features of the reference's ``mean_std_linear`` head
+    (``valid_temporal_mean_std``): the window length no longer sets the
+    feature count.
+    """
+
+    def __init__(self):
+        super().__init__()
+        # Z^joint: the two chromophores concatenated along the feature axis
+        self.join_chromophores = Rearrange(
+            "batch chrom latents patches dim -> batch latents patches (chrom dim)"
+        )
+        # The validity gets a feature axis to weigh the tokens
+        self.valid_over_features = Rearrange(
+            "batch latents patches -> batch latents patches 1"
+        )
+        # The mean gets its patch axis back to be subtracted from the tokens
+        self.mean_over_patches = Rearrange("batch latents dim -> batch latents 1 dim")
+        # One feature vector per window: [mean | std] of each latent channel
+        self.flatten_statistics = Rearrange(
+            "stat batch latents dim -> batch (latents stat dim)"
+        )
+
+    def forward(self, x: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+        """Pool the tokens over the valid patches.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            :math:`Z^O` and :math:`Z^R`, ``(batch, 2, n_latent_channels,
+            n_patches, feature_dim)``.
+        valid : torch.Tensor
+            Boolean ``(batch, n_latent_channels, n_patches)``.
+
+        Returns
+        -------
+        torch.Tensor
+            ``(batch, 4 * n_latent_channels * feature_dim)``.
+        """
+        # Z^joint = [Z^O | Z^R]
+        # (batch, 2, M, P, F) -> (batch, M, P, 2 * F)
+        x = self.join_chromophores(x)
+
+        # Number of valid patches of each latent channel (at least 1, so a
+        # window with no valid patch gives zeros and not NaN)
+        # (batch, M, P) -> (batch, M, P, 1) -> (batch, M, 1)
+        weight = self.valid_over_features(valid)
+        weight = weight.to(x.dtype)
+        count = weight.sum(dim=2)
+        count = count.clamp_min(1.0)
+
+        # Mean over the valid patches
+        # (batch, M, P, 2 * F) -> (batch, M, 2 * F)
+        mean = x * weight
+        mean = mean.sum(dim=2)
+        mean = mean / count
+
+        # Standard deviation over the valid patches (population formula, as
+        # the reference): sqrt(sum((z - mean)^2) / count)
+        # (batch, M, 2 * F) -> (batch, M, 1, 2 * F)
+        centre = self.mean_over_patches(mean)
+        std = x - centre
+        std = std * weight
+        std = std.square()
+        # (batch, M, P, 2 * F) -> (batch, M, 2 * F)
+        std = std.sum(dim=2)
+        std = std / count
+        std = std.clamp_min(0.0)
+        std = std.sqrt()
+
+        # [mean | std] of each latent channel, flattened
+        # 2 x (batch, M, 2 * F) -> (2, batch, M, 2 * F) -> (batch, 4 * M * F)
+        x = torch.stack([mean, std])
+        x = self.flatten_statistics(x)
         return x
 
 
