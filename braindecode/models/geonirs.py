@@ -570,109 +570,269 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
 
 
 class _TemporalEncoder(nn.Module):
-    """Temporal encoder of one chromophore: patch projection, LayerNorm and a
-    learnable temporal positional embedding, then a Transformer over the
-    patches of each channel (the authors' ``TemporalStreamEncoder``)."""
+    """Temporal encoder of one chromophore (paper §2.2).
+
+    "Every patch is projected into a D-dimensional token and augmented with a
+    learnable temporal positional embedding", then a Transformer models "the
+    token sequence within each physical channel". The authors'
+    ``TemporalStreamEncoder``; HbO and HbR each have their own.
+
+    Parameters
+    ----------
+    patch_size : int
+        Samples per patch, :math:`S`.
+    max_patches : int
+        Rows of the temporal positional embedding.
+    embed_dim : int
+        Token width, :math:`D`.
+    num_heads : int
+        Heads of the Transformer.
+    depth : int
+        Layers of the Transformer.
+    mlp_ratio : float
+        Feed-forward width of the Transformer, over ``embed_dim``.
+    drop_prob : float
+        Dropout of the Transformer.
+    activation : type[nn.Module], default=nn.GELU
+        Activation of the Transformer.
+    init_std : float, default=0.02
+        Standard deviation of the initial positional embedding (the
+        reference's ``time_embedding_init_std``).
+    """
 
     def __init__(
         self,
-        patch_size,
-        max_patches,
-        embed_dim,
-        num_heads,
-        depth,
-        mlp_ratio,
-        drop_prob,
-        activation,
+        patch_size: int,
+        max_patches: int,
+        embed_dim: int,
+        num_heads: int,
+        depth: int,
+        mlp_ratio: float,
+        drop_prob: float,
+        activation: type[nn.Module] = nn.GELU,
+        init_std: float = 0.02,
     ):
         super().__init__()
+        self.init_std = init_std
+
+        # Non-overlapping patches: the time axis becomes (patches, samples)
         self.split_patches = Rearrange(
             "batch pairs (patches samples) -> batch pairs patches samples",
             samples=patch_size,
         )
+        # Patch projection: the S samples of a patch become one D-wide token
         self.patch_projection = nn.Linear(patch_size, embed_dim)
         self.patch_norm = nn.LayerNorm(embed_dim)
+        # Learnable temporal positional embedding: one row per patch index
         self.time_embedding = nn.Embedding(max_patches, embed_dim)
-        mlp_dim = round(embed_dim * mlp_ratio)
-        self.temporal_transformer = _transformer(
-            embed_dim, num_heads, mlp_dim, drop_prob, activation, depth
+        # Temporal Transformer (pre-norm, final LayerNorm). It attends over
+        # the patches of ONE channel, so its weights serve any channel count.
+        self.temporal_transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model=embed_dim,
+                nhead=num_heads,
+                dim_feedforward=round(embed_dim * mlp_ratio),
+                dropout=drop_prob,
+                activation=activation(),
+                batch_first=True,
+                norm_first=True,
+            ),
+            num_layers=depth,
+            norm=nn.LayerNorm(embed_dim),
+            enable_nested_tensor=False,
         )
         self.output_norm = nn.LayerNorm(embed_dim)
+
+        # The validity mask gets a feature axis to multiply the tokens
         self.patch_over_features = Rearrange(
             "batch pairs patches -> batch pairs patches 1"
         )
+        # Every channel becomes its own sequence of patches for the Transformer
         self.merge_pairs = Rearrange(
             "batch pairs patches dim -> (batch pairs) patches dim"
         )
         self.merge_pair_mask = Rearrange("batch pairs patches -> (batch pairs) patches")
+
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.normal_(self.time_embedding.weight, std=0.02)
+        nn.init.normal_(self.time_embedding.weight, std=self.init_std)
 
-    def forward(self, signal: torch.Tensor, patch_valid: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, patch_valid: torch.Tensor) -> torch.Tensor:
+        """Encode the patches of each channel.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            One chromophore, missing samples set to zero, of shape
+            ``(batch, n_pairs, n_patches * patch_size)``.
+        patch_valid : torch.Tensor
+            Boolean ``(batch, n_pairs, n_patches)``, ``True`` for the patches
+            that hold enough measured samples.
+
+        Returns
+        -------
+        torch.Tensor
+            :math:`H^s` of the paper, ``(batch, n_pairs, n_patches,
+            embed_dim)``, zero at the invalid patches.
+        """
+        # Cut each channel into P non-overlapping patches of S samples
         # (batch, n_pairs, P * S) -> (batch, n_pairs, P, S)
-        patches = self.split_patches(signal)
+        x = self.split_patches(x)
+        n_patches = x.shape[2]
+
+        # Patch projection and LayerNorm: one D-dimensional token per patch
         # (batch, n_pairs, P, S) -> (batch, n_pairs, P, D)
-        tokens = self.patch_projection(patches)
-        tokens = self.patch_norm(tokens)
-        # (P, D)
-        time_position = self.time_embedding.weight[: patches.shape[2]]
-        tokens = tokens + time_position
+        x = self.patch_projection(x)
+        x = self.patch_norm(x)
+
+        # Learnable temporal positional embedding of the patch index 0..P-1
+        # (P, D), broadcast over batch and pairs
+        time_position = self.time_embedding.weight[:n_patches]
+        x = x + time_position
+
+        # Validity mask: an invalid patch carries no token
         # (batch, n_pairs, P) -> (batch, n_pairs, P, 1)
         weight = self.patch_over_features(patch_valid)
-        weight = weight.to(tokens.dtype)
-        tokens = tokens * weight
+        weight = weight.to(x.dtype)
+        x = x * weight
+        token_shape = x.shape
+
+        # Which patches each channel may attend to. The reference skips a
+        # channel with no valid patch; here such a channel attends to all its
+        # patches (an all-padded row would give NaN) and is zeroed below.
         # (batch, n_pairs, P) -> (batch * n_pairs, P)
         rows_valid = self.merge_pair_mask(patch_valid)
-        # a channel with no valid patch attends to all of them, then is zeroed
         row_active = rows_valid.any(dim=1, keepdim=True)
         attend = rows_valid | ~row_active
         padding = ~attend
+
+        # Temporal Transformer over the patch sequence of each channel
         # (batch, n_pairs, P, D) -> (batch * n_pairs, P, D)
-        sequences = self.merge_pairs(tokens)
-        encoded = self.temporal_transformer(sequences, src_key_padding_mask=padding)
+        x = self.merge_pairs(x)
+        x = self.temporal_transformer(x, src_key_padding_mask=padding)
         # (batch * n_pairs, P, D) -> (batch, n_pairs, P, D)
-        encoded = encoded.reshape(tokens.shape)
-        encoded = encoded * weight
-        encoded = self.output_norm(encoded)
-        return encoded * weight
+        x = x.reshape(token_shape)
+
+        # Output LayerNorm, with the invalid patches zero before and after it
+        # (batch, n_pairs, P, D): H^s
+        x = x * weight
+        x = self.output_norm(x)
+        x = x * weight
+        return x
 
 
 class _GeometryEncoder(nn.Module):
-    """Geometry encoder: an MLP and one Transformer layer over the 6D
-    source-detector geometry of the channels (the authors'
-    ``SourceDetectorGeometryEncoder``)."""
+    """Geometry encoder (paper Appendix B.2, Table 6).
 
-    def __init__(self, embed_dim, hidden_dim, num_heads, drop_prob, activation):
+    Turns the six-dimensional geometry vector :math:`g_c` of each channel
+    (midpoint and source-to-detector offset) into its embedding :math:`G`,
+    with an MLP and a Transformer over the channels. The authors'
+    ``SourceDetectorGeometryEncoder``.
+
+    Parameters
+    ----------
+    embed_dim : int
+        Width of the geometry embedding, :math:`D`.
+    hidden_dim : int
+        Hidden width of the MLP.
+    num_heads : int
+        Heads of the Transformer.
+    drop_prob : float
+        Dropout of the Transformer.
+    activation : type[nn.Module], default=nn.GELU
+        Activation of the MLP and of the Transformer.
+    geometry_dim : int, default=6
+        Size of :math:`g_c`: three midpoint and three offset coordinates
+        (Eq. 4).
+    depth : int, default=1
+        Layers of the Transformer ("1 layer", Table 6).
+    mlp_ratio : float, default=2.0
+        Feed-forward width of the Transformer, over ``embed_dim`` (the
+        reference's ``embedding_dim * 2``).
+    """
+
+    def __init__(
+        self,
+        embed_dim: int,
+        hidden_dim: int,
+        num_heads: int,
+        drop_prob: float,
+        activation: type[nn.Module] = nn.GELU,
+        geometry_dim: int = 6,
+        depth: int = 1,
+        mlp_ratio: float = 2.0,
+    ):
         super().__init__()
+
+        # Geometry MLP: g_c (6 numbers) -> one D-wide token per channel
         self.geometry_projection = nn.Sequential(
-            nn.Linear(6, hidden_dim),
+            nn.Linear(geometry_dim, hidden_dim),
             activation(),
             nn.Linear(hidden_dim, embed_dim),
             nn.LayerNorm(embed_dim),
         )
-        self.spatial_transformer = _transformer(
-            embed_dim, num_heads, embed_dim * 2, drop_prob, activation, 1
+        # Spatial Transformer (pre-norm, final LayerNorm): each channel sees
+        # where the other channels of the montage are
+        self.spatial_transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model=embed_dim,
+                nhead=num_heads,
+                dim_feedforward=round(embed_dim * mlp_ratio),
+                dropout=drop_prob,
+                activation=activation(),
+                batch_first=True,
+                norm_first=True,
+            ),
+            num_layers=depth,
+            norm=nn.LayerNorm(embed_dim),
+            enable_nested_tensor=False,
         )
+
+        # The channel mask gets a feature axis to multiply the tokens
         self.pair_over_features = Rearrange("batch pairs -> batch pairs 1")
 
     def forward(self, geometry: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+        """Embed the geometry of each channel.
+
+        Parameters
+        ----------
+        geometry : torch.Tensor
+            :math:`g_c` of each pair, ``(batch, n_pairs, 6)``.
+        valid : torch.Tensor
+            Boolean ``(batch, n_pairs)``, ``True`` for the pairs that hold
+            data.
+
+        Returns
+        -------
+        torch.Tensor
+            :math:`G` of the paper, ``(batch, n_pairs, embed_dim)``, zero for
+            the invalid pairs.
+        """
+        # A pair without data has no geometry: its g_c is set to zero
         # (batch, n_pairs) -> (batch, n_pairs, 1)
         valid_over_features = self.pair_over_features(valid)
         zeros = torch.zeros_like(geometry)
-        # (batch, n_pairs, 6): an invalid pair has no geometry
-        geometry = torch.where(valid_over_features, geometry, zeros)
+        # (batch, n_pairs, 6)
+        x = torch.where(valid_over_features, geometry, zeros)
+
+        # Geometry MLP: g_c -> one token per channel
         # (batch, n_pairs, 6) -> (batch, n_pairs, D)
-        tokens = self.geometry_projection(geometry)
-        weight = valid_over_features.to(tokens.dtype)
-        tokens = tokens * weight
-        # a sample with no valid pair attends to all of them, then is zeroed
+        x = self.geometry_projection(x)
+        weight = valid_over_features.to(x.dtype)
+        x = x * weight
+
+        # Which channels may be attended to. As in the temporal encoder, a
+        # recording with no valid pair attends to all and is zeroed below.
         any_valid = valid.any(dim=1, keepdim=True)
         attend = valid | ~any_valid
         padding = ~attend
-        encoded = self.spatial_transformer(tokens, src_key_padding_mask=padding)
-        return encoded * weight
+
+        # Spatial Transformer over the channels of the montage
+        # (batch, n_pairs, D): G
+        x = self.spatial_transformer(x, src_key_padding_mask=padding)
+        x = x * weight
+        return x
 
 
 class _ChannelCompressorAttention(nn.Module):
@@ -856,22 +1016,6 @@ class _ResidualProjectionBlock(nn.Module):
         update = self.main(x)
         update = self.residual_scale * update
         return skip + update
-
-
-def _transformer(embed_dim, num_heads, mlp_dim, drop_prob, activation, depth):
-    """Pre-norm ``nn.TransformerEncoder`` with a final LayerNorm."""
-    layer = nn.TransformerEncoderLayer(
-        embed_dim,
-        num_heads,
-        mlp_dim,
-        drop_prob,
-        activation(),
-        batch_first=True,
-        norm_first=True,
-    )
-    return nn.TransformerEncoder(
-        layer, depth, norm=nn.LayerNorm(embed_dim), enable_nested_tensor=False
-    )
 
 
 def _chromophore_projection(embed_dim, feature_dim, drop_prob, activation):
