@@ -404,7 +404,8 @@ def test_warn_if_sfreq_differs_warns():
         warn_if_sfreq_differs("M", 250, 200)
 
 
-_FNIRS_PAIRING = {  # pair-aware fNIRS models: chs_info sets their channel_order
+# pair-aware fNIRS models: chs_info sets their channel_order
+_FNIRS_PAIRING: dict[str, dict] = {
     "FNIRS4D": {},
     "FNIRSPreT": dict(depth=1),
     "FNIRST": dict(depth=1),
