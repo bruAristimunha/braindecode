@@ -269,10 +269,11 @@ class JungMAE(EEGModuleMixin, nn.Module):
         # -> (batch * n_pairs, n_patches, embed_dim)
         tokens = self.patch_embed(patches)
         # (n_patches, embed_dim)
+        # at least float32, then cast: as the reference in half precision
+        table_dtype = torch.promote_types(tokens.dtype, torch.float32)
         positions = sinusoidal_positional_encoding(
-            n_patches, tokens.shape[-1], device=x.device
+            n_patches, tokens.shape[-1], device=x.device, dtype=table_dtype
         )
-        # computed in float32 and cast, as the reference
         positions = positions.to(tokens.dtype)
         tokens = tokens + positions
         # A pair without valid patch attends to all (an all-masked softmax
