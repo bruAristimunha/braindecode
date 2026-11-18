@@ -6518,6 +6518,8 @@ def test_fnirsnet_matches_the_authors_module(n_chans, n_times, f1, f2, kernel):
         model.train(training)
         expected = reference(x.unsqueeze(1))
         torch.testing.assert_close(model(x), expected, rtol=0, atol=0)
+        # a second forward on both sides, so their BatchNorm statistics stay in step
+        expected = reference(x.unsqueeze(1))
         features = model(x, return_features=True)["features"]
         torch.testing.assert_close(model.final_layer(features), expected, rtol=0, atol=0)
     optimizers = [torch.optim.AdamW(m.parameters(), lr=1e-2) for m in (reference, model)]
