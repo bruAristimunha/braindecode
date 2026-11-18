@@ -23,119 +23,212 @@ from braindecode.models.util import fnirs_channel_order, fnirs_split_hbo_hbr
 
 
 class JungMAE(EEGModuleMixin, nn.Module):
-    r"""JungMAE, the GeoNIRS authors' masked autoencoder after Jung et al. (2025).
+    r"""JungMAE from Jung et al. (2025), as implemented by the GeoNIRS authors.
 
     :bdg-info:`Attention/Transformer` :bdg-danger:`Foundation Model`
 
     .. versionadded:: 2.1
 
-    The architecture follows Jung, Lee and An (IEEE BCI 2025,
-    doi:10.1109/BCI65088.2025.10931275), who "propose a novel foundation model
-    for fNIRS data based on a self-supervised masked autoencoder framework"
-    :footcite:`jung2025mae` and released no code. This class ports the GeoNIRS
-    authors' re-implementation (``model/`` of GeoNIRS at ``81f8995``), "a
-    paper-guided implementation rather than an exact reproduction of the
-    original method", and loads ``jung_mae.pt``, which the GeoNIRS authors
-    trained; their paper calls it Jung-MAE (Tables 14 and 15)
-    :footcite:`li2026geonirs`. It encodes channels independently with shared
-    parameters and does not model channel geometry.
+    Labelled fNIRS data are slow and costly to collect, and supervised
+    decoders need a lot of them. Jung, Lee and An :footcite:`jung2025mae`
+    "propose a novel foundation model for fNIRS data based on a
+    self-supervised masked autoencoder framework", pretrained on unlabelled
+    recordings. They report that it matches supervised training "while
+    requiring only one-third of the labeled training data", and that "a larger
+    masking size aligns with the low-frequency nature of fNIRS signals". Their
+    paper (IEEE BCI 2025) is not open access and came without code, so what is
+    said about it here comes from its abstract.
 
-    Each HbO/HbR pair is cut into patches of ``patch_size`` time points;
-    the HbO and HbR samples of a patch are interleaved
-    (``[HbO_t, HbR_t, ...]``), projected to ``embed_dim`` (``patch_embed``)
-    and given a sinusoidal patch position. A pre-norm Transformer
-    (``encoder``) encodes the patches of each pair, with the same weights for
-    every pair. A patch with fewer than ``minimum_patch_valid_fraction`` valid
-    samples is left out of the attention and its token is zero. Pretraining
-    (not ported) hid half of the valid patches of each pair and reconstructed
-    them with a 2-layer, 96-wide decoder under a mean squared error. The head
-    is the benchmark's ``flatten_linear``: all tokens flattened, then Dropout
-    (``head_dropout``) and one Linear (``final_layer``).
+    This class ports the implementation and the ``jung_mae.pt`` weights of the
+    GeoNIRS authors (``GeoNIRS/GeoNIRS`` at commit ``81f8995``), who use the
+    model as a baseline and call it Jung-MAE (Tables 1, 14 and 15 of
+    :footcite:`li2026geonirs`). Their paper describes it as "a paper-guided
+    implementation of the multi-dataset fNIRS pretraining framework of Jung et
+    al. (2025)" which, to "accommodate heterogeneous channel counts", "uses
+    channel-independent encoding with shared parameters" (Section 3.1). The
+    details below are read from the GeoNIRS code.
 
-    **Braindecode mapping.** ``x`` is ``(batch, n_chans, n_times)``,
-    ``n_chans = 2 * n_pairs``: HbO rows then HbR rows, or MNE's interleaved
-    order read from ``chs_info``. The reference takes ``hbo``/``hbr`` tensors
-    with validity masks; here NaN marks a missing sample (an all-NaN row, a
-    missing channel) and the opt-in ``mask`` marks more. :meth:`encode`
-    returns the reference's ``"foundation"``
-    ``(batch, n_pairs, n_patches, embed_dim)`` and ``"valid"``. With
-    ``jung_mae.pt`` the features equal the reference's in eval mode (max-abs
-    0.0, with and without missing samples); in training mode the reference
-    packs the visible tokens and the port masks keys, so dropout draws differ.
-    The benchmark's training-set standardization of the features is left to
-    the caller. ``final_layer`` is drawn as the reference's other Linear
-    layers (Xavier uniform, zero bias); the benchmark head keeps PyTorch's
-    default. ``on_non_divisible="pad"``/``"crop"`` and ``mask`` are additions
-    of the port; ``ch_mask`` is refused, as ``final_layer`` spans every pair.
+    .. rubric:: Architectural Overview
+
+    Every HbO/HbR pair (one source-detector channel) is a sequence of its own.
+    Its window is cut into 2 s patches, each patch becomes one token that
+    holds both chromophores, and a small Transformer encodes the tokens of
+    that pair. The same weights serve every pair, which is how one checkpoint
+    handles montages of any size. The classifier then flattens the tokens of
+    all the pairs. With :math:`B` the batch size, :math:`C` = ``n_chans // 2``
+    pairs, :math:`Q` = ``patch_size``, :math:`P` patches and :math:`D` =
+    ``embed_dim``, the model has the following sequence of steps::
+
+        x (B, 2C, n_times): HbO and HbR rows, NaN = missing sample
+        1. HbO/HbR split, invalid samples to zero  -> (B, C, P*Q) each
+        2. to_patches: [HbO_t, HbR_t, ...]         -> (B*C, P, 2Q)
+        3. patch_embed + sinusoidal position       -> (B*C, P, D)
+        4. encoder, invalid patches not attended   -> (B, C, P, D)   encode()
+        5. flatten_layer, head_dropout             -> (B, C*P*D)
+        6. final_layer                             -> (B, n_outputs)
+
+    .. rubric:: Macro Components
+
+    - ``JungMAE.patch_embed`` **Patch tokenization**
+
+      A patch interleaves the :math:`Q` HbO samples :math:`o` and HbR samples
+      :math:`r` of pair :math:`c`. One :class:`~torch.nn.Linear` maps it to a
+      :math:`D`-wide token, and the fixed sinusoidal encoding of the patch
+      index :math:`p` is added:
+
+      .. math::
+
+          \mathbf{z}_{c,p} = \mathbf{W}\,[o_{c,pQ},\, r_{c,pQ},\, \dots,\,
+          o_{c,pQ+Q-1},\, r_{c,pQ+Q-1}] + \mathbf{b} + \mathrm{PE}(p).
+
+    - **Patch validity** (``minimum_patch_valid_fraction``)
+
+      A sample is valid when both chromophores are finite and it is not in
+      ``mask``. Invalid samples are set to zero, and a patch counts only when
+      at least :math:`\lceil 0.8\,Q \rceil` of its samples are valid. The
+      GeoNIRS paper applies the same 80 % rule to its own model (Appendix
+      B.1.2).
+
+    - ``JungMAE.encoder`` **Transformer encoder**
+
+      Four pre-norm :class:`~torch.nn.TransformerEncoderLayer` blocks (8
+      heads, feed-forward width 768, GELU) and a final
+      :class:`~torch.nn.LayerNorm`, over the :math:`P` tokens of one pair.
+      Invalid patches are not attended and their output is zero, so a pair
+      without any valid patch gives zero features.
+
+    - ``JungMAE.final_layer`` **Classification head**
+
+      Flatten, :class:`~torch.nn.Dropout` and one :class:`~torch.nn.Linear`,
+      the ``flatten_linear`` head of the GeoNIRS benchmark. It is not
+      pretrained, and its input size fixes ``n_chans`` and ``n_times``.
+
+    .. rubric:: Temporal, Spatial, and Chromophore Encoding
+
+    - **Temporal.** Non-overlapping 2 s patches (10 samples at 5 Hz) with a
+      fixed sinusoidal position. The GeoNIRS paper pretrains on 30 s windows
+      (15 patches) and keeps each downstream task's 10 s or 12 s window
+      (Appendix B.1.2).
+    - **Spatial.** None. Pairs never attend to each other and the model sees
+      no optode position. A pair is identified only by where its features sit
+      in the head input, so the pairs must keep the order used in training.
+    - **Chromophores.** HbO and HbR share each token, sample by sample; HbT
+      is not used. The rows must be the HbO and the HbR rows of the same
+      pairs (see ``channel_order``).
+
+    .. rubric:: Pretraining
+
+    In the reference, each pair keeps half of its valid patches visible,
+    drawn at random, and hides the others. The encoder reads the visible
+    tokens only. A lighter decoder (two layers of width 96, with a learned
+    mask token) predicts every patch, and the loss is the mean squared error
+    over the valid samples of the hidden patches. The decoder is stored in
+    ``jung_mae.pt`` and is not part of this class.
+
+    .. rubric:: Known Limitations
+
+    - The model "does not model physical channel geometry" (GeoNIRS paper,
+      Section 3.1): different channel counts "are supported without modeling
+      physical channel coordinates or cross-layout correspondence" (Table 13).
+    - It is "a paper-guided implementation rather than an exact reproduction
+      of the original method" (GeoNIRS paper, Appendix G).
+
+    .. rubric:: Pretrained Weights
+
+    ``checkpoint/jung_mae.pt`` of ``GeoNIRS/GeoNIRS`` at ``81f8995`` was
+    trained by the GeoNIRS authors and is not on the Hugging Face Hub. It
+    holds the encoder (1,783,872 parameters), the decoder (244,436) and the
+    model configuration, which equals the defaults of this class.
 
     .. important::
-       **Pre-trained weights.** ``checkpoint/jung_mae.pt`` of
-       github.com/GeoNIRS/GeoNIRS at ``81f8995`` (sha256 ``6bb13e85...``), not
-       on the Hugging Face Hub. :meth:`load_state_dict` takes the payload as
-       released, drops the decoder and keeps the new head:
+       :meth:`load_state_dict` takes the file as released. It drops the
+       decoder and keeps the new ``final_layer``:
 
        .. code-block:: python
+
+           import torch
+           from braindecode.models import JungMAE
 
            payload = torch.load("jung_mae.pt", map_location="cpu", weights_only=True)
            model = JungMAE(n_chans=40, n_outputs=2, n_times=60, sfreq=5.0)
            model.load_state_dict(payload)
 
-       It stores the model configuration (the defaults here), no data
-       configuration. The GeoNIRS paper feeds every model the same windows:
-       HbO and HbR (µmol/L) resampled to 5 Hz and each z-scored per recording
-       over all valid channels and samples; 30 s windows for pretraining,
-       each task's length (10 s or 12 s) downstream.
+    The weights expect the inputs of the GeoNIRS paper (Appendix B.1): HbO and
+    HbR in µmol/L resampled to 5 Hz, each chromophore z-scored per recording
+    over all its valid channels and time points.
+
+    .. rubric:: Differences from the Reference Implementation
+
+    - **Input.** One tensor ``(batch, n_chans, n_times)``, with the HbO rows
+      then the HbR rows, or MNE's interleaved order read from ``chs_info``.
+      The reference takes ``hbo`` and ``hbr`` tensors with validity masks.
+      Here NaN marks a missing sample (an all-NaN row is a missing channel),
+      and the opt-in ``mask`` marks more.
+    - **Parity.** The reference packs the valid tokens of each pair; this
+      class masks the invalid ones as attention keys. With ``jung_mae.pt``
+      the features equal those of the authors' module (max-abs 0.0) in eval
+      mode under :func:`torch.no_grad`. With gradients on they differ by
+      about 2e-6 at most (float32 rounding), and in training mode the
+      dropout draws differ.
+    - **Head.** The benchmark head standardizes the flattened features with
+      training-set statistics before its Dropout; this head does not, so
+      standardize the eval-mode ``return_features`` yourself to reproduce
+      the benchmark. ``final_layer`` starts Xavier-uniform with a zero bias,
+      as the other Linear layers of the reference.
+    - **Additions.** ``on_non_divisible="pad"`` or ``"crop"`` (the reference
+      refuses a partial patch) and ``mask``. ``ch_mask`` is refused, because
+      ``final_layer`` spans every pair.
 
     Parameters
     ----------
     patch_size : int, default=10
-        Reference ``patch_samples``: samples per patch (2 s at 5 Hz).
-    on_non_divisible : {"error", "pad", "crop"}, default="error"
-        A ``n_times`` that is not a multiple of ``patch_size`` is refused
-        (as the reference), zero-padded or cropped.
+        Samples per patch (``patch_samples`` in the reference), 2 s at 5 Hz.
     embed_dim : int, default=192
-        Reference ``encoder_dim``: token width.
+        Width of the tokens (``encoder_dim`` in the reference).
     depth : int, default=4
-        Reference ``encoder_layers``: Transformer layers.
+        Number of Transformer layers (``encoder_layers`` in the reference).
     num_heads : int, default=8
-        Reference ``encoder_heads``: attention heads per layer.
+        Attention heads per layer (``encoder_heads`` in the reference).
     mlp_ratio : float, default=4.0
-        Reference ``mlp_ratio``: feed-forward width over ``embed_dim``.
+        Feed-forward width over ``embed_dim``.
+    drop_prob : float, default=0.1
+        Dropout of the encoder layers (``dropout`` in the reference).
+    head_drop_prob : float, default=0.1
+        Dropout before ``final_layer`` (``head_dropout`` in the benchmark).
+    minimum_patch_valid_fraction : float, default=0.8
+        Fraction of valid samples a patch needs, in (0, 1].
+    activation : type[nn.Module], default=nn.GELU
+        Activation of the feed-forward layers.
     channel_order : {"stacked", "interleaved"} or None, default=None
-        ``[HbO_1..HbO_P, HbR_1..HbR_P]`` or MNE's ``[HbO_1, HbR_1, ...]``;
+        ``[HbO_1..HbO_C, HbR_1..HbR_C]`` or MNE's ``[HbO_1, HbR_1, ...]``.
         ``None`` reads it from ``chs_info`` (``"stacked"`` without it).
         ``n_chans`` must be even.
-    drop_prob : float, default=0.1
-        Reference ``dropout`` in the encoder layers.
-    head_drop_prob : float, default=0.1
-        Benchmark ``head_dropout``, before ``final_layer``.
-    minimum_patch_valid_fraction : float, default=0.8
-        Reference name: fraction of valid samples a patch needs.
-    activation : type[nn.Module], default=nn.GELU
-        Feed-forward activation (reference: ``"gelu"``).
+    on_non_divisible : {"error", "pad", "crop"}, default="error"
+        What to do when ``n_times`` is not a multiple of ``patch_size``:
+        raise, as the reference does; pad with missing samples, to which the
+        validity rule applies; or crop.
 
     Notes
     -----
-    Protocol of the GeoNIRS benchmark (paper Appendix B.5-B.6): eight
-    held-out binary tasks, subject-level five-fold cross-validation, seeds
-    810 and 811; 30 epochs, batch 16, AdamW (weight decay 0.05), 3 warmup
-    epochs and cosine decay, class-weighted cross-entropy, early stopping
-    (patience 15), model selection by validation balanced accuracy, one test
-    evaluation. The linear probe (LP) trains the head only (learning rate
-    1e-4); LoRA (rank 4, alpha 8) adapts every Linear.
+    The GeoNIRS benchmark (Section 3.1 and Appendices B.5-B.6 of
+    :footcite:`li2026geonirs`) evaluates eight held-out binary tasks with
+    subject-level five-fold cross-validation and the seeds 810 and 811. Every
+    method gets the same windows and folds and the same training: 30 epochs,
+    AdamW, class-weighted cross-entropy and model selection by validation
+    balanced accuracy. Jung-MAE-LP trains the head only, with a learning rate
+    of 1e-4.
 
-    Replication of Jung-MAE-LP with ``jung_mae.pt`` in this port and the
-    benchmark's linear-probe loop (seeds 810, 811, mean over folds and
-    seeds); the reference encoder gives the same features (max-abs 0.0):
+    This class with ``jung_mae.pt`` and the benchmark's linear-probe loop
+    reproduces Jung-MAE-LP (mean over the five test folds and the two seeds):
 
-    =====================  ========  =================  ========
-    Task                   Metric    GeoNIRS paper (%)  Port (%)
-    =====================  ========  =================  ========
+    =====================  ========  =================  ==============
+    Task                   Metric    GeoNIRS paper (%)  This class (%)
+    =====================  ========  =================  ==============
     DS42 (action mode)     macro-F1  68.36              68.35
     DS42 (action mode)     AUROC     76.78              76.80
     DS19 (pain intensity)  macro-F1  54.23              54.95
     DS19 (pain intensity)  AUROC     58.39              58.63
-    =====================  ========  =================  ========
+    =====================  ========  =================  ==============
 
     References
     ----------
