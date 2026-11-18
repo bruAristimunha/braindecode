@@ -7039,10 +7039,13 @@ def test_fnirs_features_feed_head_and_reset(model_cls):
     assert model.final_layer.weight.dtype == torch.float64
 
 
-@pytest.mark.parametrize("model_cls", [FNIRST, FNIRSPreT, JungMAE])
-def test_fnirs_masks(model_cls):
+@pytest.mark.parametrize(
+    "model_cls, fill",
+    [(FNIRST, 0.0), (FNIRSPreT, 0.0), (JungMAE, float("nan"))],
+)
+def test_fnirs_masks(model_cls, fill):
     """ch_mask is refused by name; an all-False mask changes nothing; hidden
-    samples act as zero (FNIRST) or missing (JungMAE) and get no gradient."""
+    samples act as ``fill`` (zero, or missing) and get no gradient."""
     torch.manual_seed(0)
     model = model_cls(n_chans=6, n_outputs=3, n_times=60, sfreq=5.0).eval()
     x = torch.randn(2, 6, 60)
@@ -7051,7 +7054,6 @@ def test_fnirs_masks(model_cls):
     mask = torch.zeros_like(x, dtype=torch.bool)
     assert torch.equal(model(x, mask=mask), model(x))
     mask[:, 1, 20:40] = True
-    fill = float("nan") if model_cls is JungMAE else 0.0
     assert torch.equal(model(x, mask=mask), model(x.masked_fill(mask, fill)))
     hidden = x.masked_fill(mask, float("nan")).requires_grad_(True)
     model(hidden, mask=mask).sum().backward()
