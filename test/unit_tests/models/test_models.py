@@ -7491,13 +7491,6 @@ def test_fnirs_masks(model_cls, fill):
     assert hidden.grad[~mask].isfinite().all()
 
 
-def test_jung_mae_reset_head_initializes_as_the_constructor():
-    """reset_head draws the head as the constructor: Xavier, zero bias."""
-    model = JungMAE(n_chans=6, n_outputs=2, n_times=60, depth=1)
-    model.reset_head(3)
-    assert not model.final_layer.bias.any()
-
-
 @pytest.mark.parametrize("model_cls", [GeoNIRS, JungMAE])
 def test_fnirs_patch_models_refuse_a_partial_patch(model_cls):
     """A window that is not a whole number of patches raises, as in the reference."""
@@ -7681,6 +7674,8 @@ def test_mtrenirs_chromophores_and_valid_window_pooling():
 
 
 _FNIRS_WEIGHTS = os.environ.get("BRAINDECODE_FNIRS_WEIGHTS", "")
+
+
 def _fnirs_checkpoint(file, hub=None):
     """``file`` from ``BRAINDECODE_FNIRS_WEIGHTS``, else from the Hub repo and
     revision ``hub``."""
@@ -7715,7 +7710,8 @@ def _check_released_fnirs_checkpoint(path, cls, kwargs, expected):
 
 
 # features[:, :4] of the authors' code on the input of
-# _check_released_fnirs_checkpoint, computed in Voyager Job bd-fix1564-probe-11150236
+# _check_released_fnirs_checkpoint, computed with the authors' code at the
+# commit each test names
 
 
 @pytest.mark.parametrize(

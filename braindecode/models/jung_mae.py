@@ -178,6 +178,8 @@ class JungMAE(EEGModuleMixin, nn.Module):
         _check_on_non_divisible(on_non_divisible)
         self.on_non_divisible = on_non_divisible
         self.patch_size = patch_size
+        if not 0 < minimum_patch_valid_fraction <= 1:
+            raise ValueError("minimum_patch_valid_fraction must be in (0, 1].")
         self.min_valid_samples = math.ceil(patch_size * minimum_patch_valid_fraction)
         n_patches = patch_count(self.n_times, patch_size, on_non_divisible)
         self.patch_embed = nn.Linear(2 * patch_size, embed_dim)
@@ -235,8 +237,12 @@ class JungMAE(EEGModuleMixin, nn.Module):
         shape as ``x``): True samples count as missing."""
         if mask is not None:
             x = x.masked_fill(mask, float("nan"))
+        n_samples = x.shape[-1]
         # (batch, n_chans, n_times) -> (batch, n_chans, n_patches * patch_size)
         x = pad_or_crop_to_patches(x, self.patch_size, self.on_non_divisible)
+        # padded samples are missing: the validity threshold applies to them
+        padded = torch.arange(x.shape[-1], device=x.device) >= n_samples
+        x = x.masked_fill(padded, float("nan"))
         # -> 2 x (batch, n_pairs, n_patches * patch_size)
         hbo, hbr = fnirs_split_hbo_hbr(x, self.channel_order)
         batch_size, n_pairs, _ = hbo.shape
@@ -264,8 +270,10 @@ class JungMAE(EEGModuleMixin, nn.Module):
         tokens = self.patch_embed(patches)
         # (n_patches, embed_dim)
         positions = sinusoidal_positional_encoding(
-            n_patches, tokens.shape[-1], device=x.device, dtype=tokens.dtype
+            n_patches, tokens.shape[-1], device=x.device
         )
+        # computed in float32 and cast, as the reference
+        positions = positions.to(tokens.dtype)
         tokens = tokens + positions
         # A pair without valid patch attends to all (an all-masked softmax
         # is NaN); its output is zeroed.
