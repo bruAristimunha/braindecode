@@ -6545,6 +6545,13 @@ def test_fnirsnet_parameter_counts_of_table_iv(kernel, n_params):
     assert sum(p.numel() for p in model.parameters()) == n_params
 
 
+def test_fnirsnet_refuses_ch_mask():
+    """DWConv spans every row, so padded channels cannot be left out."""
+    model = FNIRSNet(n_chans=4, n_outputs=2, n_times=20)
+    with pytest.raises(ValueError, match="ch_mask"):
+        model(torch.randn(2, 4, 20), ch_mask=torch.ones(2, 4, dtype=torch.bool))
+
+
 def test_fnirsnet_kernel_length_out_of_range_raises():
     for bad in (0, 41):
         with pytest.raises(ValueError, match="dhr_kernel_length"):
