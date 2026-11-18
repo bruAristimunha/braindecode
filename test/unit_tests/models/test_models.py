@@ -7646,6 +7646,38 @@ def test_geonirs_refuses_a_bad_pool_or_geometry_count():
     model = GeoNIRS(chs_info=_fnirs_chs_info(2), n_outputs=2, n_times=60)
     with pytest.raises(ValueError, match="geometry and x have different channel counts"):
         model(torch.randn(1, 4, 60), geometry=torch.zeros(3, 6))
+    with pytest.raises(ValueError, match="geometry is not 6-D"):
+        model(torch.randn(1, 4, 60), geometry=torch.zeros(2, 5))
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"embed_dim": 30, "num_heads": 4}, r"divisible by num_heads \(4\)"),
+        ({"embed_dim": 32, "num_heads": 4, "geometry_heads": 3},
+         r"divisible by geometry_heads \(3\)"),
+        ({"embed_dim": 32, "num_heads": 4, "compressor_heads": 3},
+         r"divisible by compressor_heads \(3\)"),
+        ({"minimum_patch_valid_fraction": 1.5}, r"must be in \[0, 1\], got 1.5"),
+    ],
+)
+def test_geonirs_names_the_refused_argument(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        GeoNIRS(chs_info=_fnirs_chs_info(2), n_outputs=2, n_times=60, **kwargs)
+
+
+def test_geonirs_encode_takes_the_ch_mask_of_forward():
+    """``encode`` reduces the ``(batch, n_chans)`` mask to HbO/HbR pairs: a
+    padded pair changes nothing for the real one."""
+    model = GeoNIRS(chs_info=_fnirs_chs_info(2), n_outputs=2, n_times=60,
+                    embed_dim=32, num_heads=4, depth=1, n_latent_channels=2,
+                    feature_dim=4).eval()
+    x = torch.randn(1, 4, 60)  # [HbO_1, HbO_2, HbR_1, HbR_2]
+    mask = torch.tensor([[True, False, True, False]])
+    with torch.no_grad():
+        tokens = model.encode(x, ch_mask=mask)["foundation"]
+        alone = model.encode(x[:, [0, 2]], geometry=model.default_geometry[:1])
+    torch.testing.assert_close(tokens, alone["foundation"])
 
 
 def test_mtrenirs_refuses_a_bad_pool_or_coordinate_count():
