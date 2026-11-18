@@ -343,6 +343,22 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
             raise ValueError("GeoNIRS needs HbO/HbR pairs: n_chans must be even.")
         if pool not in ("flatten", "mean_std"):
             raise ValueError(f"pool must be 'flatten' or 'mean_std', got {pool!r}.")
+        # Every attention splits the embed_dim features evenly over its heads
+        heads = {"num_heads": num_heads, "compressor_heads": self.compressor_heads}
+        if use_channel_geometry:
+            heads["geometry_heads"] = self.geometry_heads
+        for name, n_heads in heads.items():
+            if embed_dim % n_heads:
+                raise ValueError(
+                    f"embed_dim ({embed_dim}) must be divisible by {name} "
+                    f"({n_heads}): a head takes embed_dim / {name} features."
+                )
+        # A fraction above 1 would drop every patch and give all-zero tokens
+        if not 0.0 <= minimum_patch_valid_fraction <= 1.0:
+            raise ValueError(
+                "minimum_patch_valid_fraction must be in [0, 1], got "
+                f"{minimum_patch_valid_fraction}."
+            )
         # Where the HbO and HbR rows are (stacked or interleaved); raises when
         # chs_info does not list HbO/HbR pairs
         self.channel_order = fnirs_channel_order(self._chs_info, channel_order)
@@ -610,11 +626,15 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
                         "geometry of the HbO/HbR pairs of x."
                     )
             else:
+                # one g_c (6 numbers, as default_geometry) per pair of x, for
+                # the whole batch or for each window
                 pair_geometry = geometry
-                if pair_geometry.shape[-2] != n_pairs:
+                pair_shape = [n_pairs, self.default_geometry.shape[-1]]
+                if list(pair_geometry.shape[-2:]) != pair_shape:
                     raise ValueError(
-                        "geometry and x have different channel counts: pass one "
-                        "row per HbO/HbR pair of x."
+                        "geometry and x have different channel counts, or "
+                        "geometry is not 6-D: pass (n_pairs, 6) or (batch, "
+                        "n_pairs, 6), one row per HbO/HbR pair of x."
                     )
             pair_geometry = pair_geometry.to(device=x.device, dtype=hbo.dtype)
             # (n_pairs, 6) or (batch, n_pairs, 6) -> (batch, n_pairs, 6)
