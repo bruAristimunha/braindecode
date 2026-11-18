@@ -1482,31 +1482,62 @@ class _ValidMeanStd(nn.Module):
         return x
 
 
-def _optode_geometry(chs_info, channel_order: str) -> np.ndarray:
-    """``(n_pairs, 6)`` ``[midpoint, detector - source]`` of the HbO channels,
-    centred on the mean optode and divided by the 25.46 mm of the GeoNIRS
-    pretraining. As the reference (``scripts/build_fair_input.py``), a pair
-    without source/detector locations is zero and left out of the centre;
-    ``(0, 6)`` when no pair has them."""
+def _optode_geometry(
+    chs_info, channel_order: str, scale: float = 25.460582556839242 / 1000.0
+) -> np.ndarray:
+    """Geometry vector :math:`g_c` of each HbO/HbR pair of ``chs_info``
+    (paper Appendix B.2, Eqs. 4-5), as the reference builds it for a
+    downstream dataset (``scripts/build_fair_input.py``).
+
+    Parameters
+    ----------
+    chs_info : list of dict or None
+        MNE channel information; ``loc[3:9]`` holds the source and the
+        detector of an fNIRS channel, in metres.
+    channel_order : {"stacked", "interleaved"}
+        Where the HbO and HbR rows are.
+    scale : float
+        The "fixed reference scale of 25.46 mm" of the paper, in metres
+        (the reference's ``GEOMETRY_SCALE_M``).
+
+    Returns
+    -------
+    np.ndarray
+        ``(n_pairs, 6)`` float32, ``[midpoint, detector - source]`` of each
+        pair, centred and divided by ``scale``; a pair without positions is
+        zero. ``(0, 6)`` when no pair has positions.
+    """
     empty = np.zeros((0, 6), dtype=np.float32)
     if chs_info is None:
         return empty
+
+    # The two chromophores of a pair share their optodes: read the HbO rows
     channel_index = torch.arange(len(chs_info))[None]
     hbo_index, _ = fnirs_split_hbo_hbr(channel_index, channel_order)
-    # (n_pairs, 6): source and detector, loc[3:9]; a missing or short loc stays zero
+
+    # Source s_c and detector d_c of each pair, from loc[3:9]
+    # (n_pairs, 6); a missing or short loc stays zero
     optodes = np.zeros((hbo_index.shape[1], 6))
     for row, i in zip(optodes, hbo_index[0].tolist()):
         loc = chs_info[i].get("loc")
         loc = np.ravel(loc if loc is not None else [])[3:9]
         row[: loc.size] = loc
+    # A pair has positions when they are finite and not all zero
     present = np.isfinite(optodes).all(axis=1) & (optodes != 0).any(axis=1)
     if not present.any():
         return empty
-    scale = 25.460582556839242 / 1000.0  # the 25.46 mm reference scale, in metres
+
+    # "Geometry coordinates are additionally centered to remove global
+    # translation differences": the centre is the mean of the optodes that
+    # have a position
     present_optodes = np.concatenate([optodes[present, :3], optodes[present, 3:]])
     center = present_optodes.mean(axis=0)
+    # Dimensionless coordinates: centred, then divided by the reference scale
     source = (optodes[:, :3] - center) / scale
     detector = (optodes[:, 3:] - center) / scale
+
+    # g_c = [mid_c, Delta_c], mid_c = (s_c + d_c) / 2, Delta_c = d_c - s_c
     geometry = np.concatenate([0.5 * (source + detector), detector - source], axis=1)
+    # A pair without positions has a zero geometry, as in the reference
     geometry[~present] = 0.0
     return geometry.astype(np.float32)
