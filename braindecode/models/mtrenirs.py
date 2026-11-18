@@ -38,146 +38,416 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
 
     :bdg-info:`Attention/Transformer` :bdg-dark-line:`Channel` :bdg-danger:`Foundation Model`
 
-    .. versionadded:: 2.1
-
     .. figure:: https://braindecode.org/dev/_static/model/mtrenirs.png
        :align: center
        :alt: MtReNIRS preprocessing, montage harmonization, token embedding and pretraining
 
-       Fig. 2 of the paper (`CC BY 4.0 <https://creativecommons.org/licenses/by/4.0/>`_):
-       "(A) fNIRS pre-processing pipeline, (B) harmonization pipeline of
+       Fig. 2 of Chae et al. (2026), arXiv:2610.36159 (`CC BY 4.0
+       <https://creativecommons.org/licenses/by/4.0/>`_): "Overview of (A)
+       fNIRS pre-processing pipeline, (B) harmonization pipeline of
        heterogeneous montages, (C) deriving signal and spatio-chromophore token
-       embedding, and (D) masked pretraining and downstream transfer". This
-       class is the encoder of (C)-(D) with a linear head.
+       embedding, and (D) masked pretraining and downstream transfer operations
+       of the foundation model". This class is the encoder of (C)-(D) with a
+       linear head.
 
-    A montage-aware masked autoencoder for fNIRS
-    :footcite:`microsoft2026mtrenirs`. Each token is one 10-s window
-    :math:`x_{c,t} \in \mathbb{R}^{100}` of a chromophore channel
-    :math:`c = (i, b_c)`; "Each 10-s signal segment was projected by a linear
-    layer to a 128-dimensional signal embedding", to which an MLP of six
-    Fourier bands of :math:`u_c = [q_c^\top, b_c]^\top` (10-05 slot position
-    and HbO/HbR flag) is added. Six pre-norm Transformer blocks with per-head
-    QK LayerNorm follow, and "rotary position encoding (RoPE) with base 500
-    encoded the temporal-window index" :footcite:`su2024roformer`.
+    MtReNIRS (Montage-aligned transferable Representations for fNIRS) is the
+    fNIRS foundation model of Chae et al. :footcite:`microsoft2026mtrenirs`.
+    From the paper (Abstract): "a montage-aware masked autoencoder, pretrained
+    on 12 public fNIRS datasets spanning 268 subjects and 567 recording hours,
+    learns generalizable neurovascular representations that transfer across
+    three external datasets. [...] Our fNIRS foundation model, MtReNIRS,
+    jointly encodes the slow hemodynamic nature of fNIRS, chromophore identity
+    and cortical location by mapping heterogeneous montages onto a shared
+    anatomical reference." The two
+    constraints behind the design (Sec. I): "Spatial channels across different
+    montages must be aligned to a common anatomical reference so that each
+    fNIRS signal can be consistently related to the underlying cortical
+    activity", and "HbO/HbR signals are slow, delayed, and highly
+    autocorrelated". A token is therefore one 10-s window of one chromophore
+    channel, tagged with the canonical 10-05 position :footcite:`oostenveld2001five`
+    of its source-detector (S-D) pair and with its chromophore; six Transformer
+    blocks mix all tokens, with the window index as their only time code.
 
-    **Mapping.** Input ``(batch, n_chans, n_times)``, one row per HbO or HbR
-    channel in any order, cut into ``n_times // window_samples`` windows.
-    :math:`q_c` is ``loc[:3]`` (metres) of ``chs_info``, read as given (the
-    reference first snaps each channel to its nearest 10-05 slot,
-    ``mtrenirs-alignment``); :math:`b_c` comes from ``coil_type`` or the
-    channel name. Without locations, pass ``coordinates`` to :meth:`forward`.
-    Channels without a location and windows with a NaN are left out of the
-    attention, as in the reference. The default ``pool="temporal_mean"``
-    feeds ``final_layer`` the paper's linear-probe input (one window per
-    trial); ``"channel_temporal_mean"`` is added here for ``ch_mask``. The
-    decoder and masking of pretraining are left out. State-dict keys are the
-    authors' (no ``mapping``), and :meth:`load_state_dict` takes the released
-    ``{"config", "model"}`` payload strictly; the head keeps its init.
+    .. rubric:: Architecture Overview
 
-    =============  ==================  ======================  ===================
-    Token length   ``window_samples``  SujinBak LOSO macro-F1  Weights
-    =============  ==================  ======================  ===================
-    2 s            20                  62.3                    not released
-    5 s            50                  65.0                    not released
-    10 s           100                 67.9                    ``mtrenirs_10s.pt``
-    =============  ==================  ======================  ===================
+    With :math:`B` the batch, :math:`C` the HbO/HbR rows (``n_chans``),
+    :math:`P` = ``window_samples``, :math:`W` = ``n_times // window_samples``
+    windows, :math:`N = W C` tokens and :math:`D` = ``embed_dim``, the model
+    has the following sequence of steps::
 
-    .. important::
-       ``mtrenirs_10s.pt`` (MIT) is mirrored at `braindecode/mtrenirs-pretrained
-       <https://huggingface.co/braindecode/mtrenirs-pretrained>`_. It expects
-       10 Hz HbO/HbR, preprocessed as in Notes, in 100-sample windows:
+        input x                                                (B, C, n_times)
+        - Windowing (split_windows): 10-s windows x_{c,t};
+          a short last window is cropped (on_non_divisible)    (B, W, C, P)
+        - Token validity: a window with a NaN, a channel
+          without a location or a ch_mask-padded channel       (B, W, C)
+        - Token sequence (merge_tokens), window-major          (B, N, P)
+        - Signal embedding (embed.signal.proj): Linear P -> D  (B, N, D)
+        - + Spatio-chromophore embedding (embed.spatial.mlp):
+          Fourier features of u_c, MLP 48 -> 128 -> D          (B, N, D)
+        - Transformer encoder (encoder.blocks), depth x:
+          LayerNorm, QK-norm RoPE self-attention, residual;
+          LayerNorm, MLP D -> mlp_dim -> D, residual           (B, N, D)
+        - Final LayerNorm (encoder.norm); invalid tokens zeroed (B, N, D)
+        - Token grid (output of encode_windows)                (B, W, C, D)
+        - Readout (pool): "temporal_mean"                      (B, C * D)
+                          "channel_temporal_mean"              (B, D)
+                          "flatten"                            (B, W * C * D)
+        - Head (final_layer): Linear                           (B, n_outputs)
 
-       .. code-block:: python
+    With the released 10-s weights and one 10-s trial (``n_times=100`` at
+    10 Hz), :math:`W = 1`, :math:`P = 100`, :math:`D = 128`; the 40 HbO/HbR
+    rows of SujinBak 2019 give 40 x 128 = 5120 features for the linear probe.
 
-           import torch
-           from huggingface_hub import hf_hub_download
+    .. rubric:: Macro Components
 
-           from braindecode.models import MtReNIRS
+    - **Tokens** (``split_windows``, ``merge_tokens``). The paper (Sec.
+      III-C): "We represented each token by a chromophore channel :math:`c`
+      and temporal window :math:`t`, where :math:`c = (i, b_c)` identifies an
+      S-D pair :math:`i` and chromophore type :math:`b_c \in \{0, 1\}`, with 0
+      and 1 denoting HbO and HbR, respectively." Each token holds the
+      :math:`P = 100` samples :math:`x_{c,t} \in \mathbb{R}^{100}` of one
+      window; there is no CLS token.
+    - **Signal embedding** (``embed.signal.proj``, ``nn.Linear(100, 128)``).
+      "Each 10-s signal segment :math:`x_{c,t} \in \mathbb{R}^{100}` was
+      projected by a linear layer to a 128-dimensional signal embedding":
 
-           path = hf_hub_download(
-               "braindecode/mtrenirs-pretrained",
-               "mtrenirs_10s.pt",
-               revision="bbc68ce5e00a4515081d900227fc06d111858e75",
-           )
-           payload = torch.load(path, map_location="cpu", weights_only=True)
-           # raw: MNE Raw with the 10-05 slot positions in loc[:3]
-           model = MtReNIRS(chs_info=raw.info["chs"], n_outputs=3, n_times=100, sfreq=10.0)
-           model.load_state_dict(payload)
+      .. math::
+
+         e^{\mathrm{sig}}_{c,t} = W_x\, x_{c,t} + b_x,
+         \qquad W_x \in \mathbb{R}^{128 \times 100}.
+
+    - **Spatio-chromophore embedding** (``embed.spatial.mlp``,
+      ``nn.Linear(48, 128)``, GELU, ``nn.Linear(128, 128)``). "For channel
+      :math:`c = (i, b_c)`, the canonical spatial coordinate is inherited from
+      its S-D pair, :math:`q_c = q_{s_i} \in \mathbb{R}^3`. We concatenated
+      this coordinate with the binary chromophore indicator :math:`b_c` to
+      form :math:`u_c = [q_c^\top, b_c]^\top \in \mathbb{R}^4`. We encoded the
+      resulting :math:`u_c` with six bands of Fourier features"
+      :footcite:`tancik2020fourier` (Eq. 2), passed through "A 48 -> 128 ->
+      128 multilayer perceptron (MLP) with GELU activation" and summed with
+      the signal embedding into the token :math:`z_{c,t} \in \mathbb{R}^{128}`:
+
+      .. math::
+
+         \phi(u_c) = \left[\sin(2^k \pi u_{c,j}),\, \cos(2^k \pi u_{c,j})
+         \right]_{j = 1, \dots, 4}^{k = 0, \dots, 5} \in \mathbb{R}^{48},
+
+      .. math::
+
+         z_{c,t} = e^{\mathrm{sig}}_{c,t}
+         + W_2\, \mathrm{GELU}(W_1 \phi(u_c) + b_1) + b_2.
+
+      "This embedding lets the encoder distinguish region-specific activity
+      while modeling coupled, often opposing HbO/HbR dynamics." As in the
+      authors' ``FourierFeatures``, the 48 features are the 24 sines followed
+      by the 24 cosines, the six bands of each coordinate together.
+    - **Canonical coordinates** (``default_coordinates``, from ``chs_info``;
+      or the ``coordinates`` argument of :meth:`forward`). Before the model,
+      the paper maps every montage to the 10-05 system (Sec. III-B, Fig. 2B):
+      "For valid 3-D geometries provided by the dataset, we centered the raw
+      S-D midpoint coordinates :math:`p_i` and matched their root mean square
+      (RMS) radius to the standard 10-05 reference (3-D RMS alignment; Fig.
+      3B)" (Eq. 1), then "assigned each aligned midpoint to its nearest canonical slot":
+
+      .. math::
+
+         \tilde{p}_i = (p_i - \bar{p})\, \frac{s_q}{s_p} + \bar{q},
+         \qquad s_p^2 = \frac{1}{N} \sum_i \lVert p_i - \bar{p} \rVert_2^2,
+
+      with :math:`N` the number of valid S-D midpoints, :math:`\bar{p}`,
+      :math:`\bar{q}` the centres of the raw and canonical coordinates and
+      :math:`s_p`, :math:`s_q` their RMS distances. Datasets with only 2-D
+      layout schematics get a "2-D anchor placement" on "an anatomically
+      supported local tangent plane", and those "with known placements but
+      missing or degenerate geometry" a label assignment. "Our model used the fixed coordinate
+      :math:`q_{s_i}` of assigned slot :math:`s_i`, not the intermediate
+      aligned coordinate. We normalized all available canonical coordinates
+      with one center and RMS scale computed from the pretraining corpus."
+      This class applies that last step,
+      :math:`\hat{q}_c = (q_c - \mu) / \sigma` with :math:`\mu` =
+      ``coordinate_center`` and :math:`\sigma` = ``coordinate_scale``; Eq. (1)
+      and the slot assignment run before it (the authors' MIT
+      ``mtrenirs.alignment.align``, slots of MNE's ``standard_1005``
+      montage).
+    - **Transformer encoder** (``encoder.blocks``, ``encoder.norm``). "The
+      encoder contained six pre-layer-normalized Transformer blocks with a
+      128-dimensional state, four attention heads, a 512-dimensional MLP, and
+      0.1 dropout. Per-head layer normalization stabilized queries and keys.
+      To preserve cross-window order without conflating time with spatial
+      identity, rotary position encoding (RoPE) :footcite:`su2024roformer`
+      with base 500 encoded the temporal-window index." A block
+      (``_TransformerBlock``) computes
+
+      .. math::
+
+         h = z + \mathrm{Drop}\big(\mathrm{Attn}(\mathrm{LN}_1(z))\big),
+         \qquad z' = h + \mathrm{MLP}(\mathrm{LN}_2(h)),
+
+      with ``mlp`` = Linear(128, 512), GELU, Dropout, Linear(512, 128).
+      In each of the :math:`H = 4` heads of size :math:`d_h = 32`
+      (``attn.qkv``, ``attn.q_norm``, ``attn.k_norm``, ``attn.proj``), the
+      query and key of the normalized input :math:`y_n` of token :math:`n`,
+      in window :math:`t_n`, are layer-normalized, then rotated by their
+      window index:
+
+      .. math::
+
+         \tilde{q}_n = \mathcal{R}_{t_n} \mathrm{LN}_q(W_q y_n), \quad
+         \tilde{k}_m = \mathcal{R}_{t_m} \mathrm{LN}_k(W_k y_m), \quad
+         \mathrm{Attn}_n = \sum_m \mathrm{softmax}_m\!\left(
+         \frac{\tilde{q}_n^\top \tilde{k}_m}{\sqrt{d_h}} + M_m \right) W_v y_m,
+
+      where :math:`M_m = 0` for a valid key and :math:`-\infty` otherwise.
+      The rotation, from the authors' ``_rope_angles`` and ``_apply_rope``
+      (rotate-half layout), with :math:`\beta` = ``rope_base``:
+
+      .. math::
+
+         \mathcal{R}_t v = v \odot \cos(t \theta) + \mathrm{rot}(v) \odot
+         \sin(t \theta), \quad \theta = [\theta_0, \dots,
+         \theta_{d_h/2-1}, \theta_0, \dots, \theta_{d_h/2-1}], \quad
+         \theta_j = \beta^{-2j/d_h},
+
+      with :math:`\mathrm{rot}(v) = [-v_{d_h/2:}, v_{:d_h/2}]`. "All S-D pairs
+      from the same window shared that index; spatial identity entered only
+      through the canonical coordinate embedding." A final LayerNorm closes
+      the encoder; "The inference encoder contained 1.23 million parameters"
+      (1,226,368 in the authors' model card).
+    - **Readout and head** (``pool``, ``final_layer``). The paper evaluates a
+      linear probe on frozen features (Sec. III-D): "we temporally averaged
+      encoder outputs before classification so that the feature
+      dimensionality remained fixed. For the primary 10-s model, each trial
+      contained a single window, making temporal-mean and flatten pooling
+      equivalent." ``"temporal_mean"`` (the default) is that readout, one
+      ``embed_dim`` vector per channel, concatenated; ``final_layer`` is the
+      linear head.
+
+    .. rubric:: Temporal, Spatial, and Spectral Encoding
+
+    - *Temporal:* within a window, time is the 100 input weights of the
+      signal projection (no convolution); across windows, RoPE of the window
+      index :math:`t` only. The weights expect 10 Hz and 10-s windows; the
+      paper chose 10 s "to capture the multi-second rise and peak of the local
+      hemodynamic response while preserving finer temporal structure" (Sec.
+      III-A).
+    - *Spatial:* no channel embedding table. Every row of ``x`` is one
+      chromophore channel, in any order and number; the HbO and HbR rows of
+      one S-D pair share :math:`q_c`, read from ``loc[:3]`` of ``chs_info``
+      (metres, head frame, already on a 10-05 slot). Rows without a location
+      (NaN or all-zero ``loc``) are left out of the attention and the
+      pooling. Without positions in ``chs_info``, pass ``coordinates``
+      (:math:`u_c` with :math:`\hat{q}_c`, shape ``(n_chans, 4)`` or
+      ``(batch, n_chans, 4)``) to :meth:`forward`.
+    - *Chromophore:* :math:`b_c = 0` for HbO and 1 for HbR, as the
+      checkpoint's ``chromophore_map``, read from MNE's ``coil_type`` or the
+      ``" hbo"``/``" hbr"`` name suffix; any other channel (e.g. HbT) raises.
+    - *Spectral:* none explicit; the inputs are band-limited to 0.01-0.5 Hz by
+      the preprocessing (Notes).
+
+    .. rubric:: Additional Mechanisms
+
+    - **Masked pretraining** (Fig. 2D, Sec. III-C; not part of this class).
+      "For each 60-s crop, we randomly masked 25% of valid tokens and passed
+      only visible tokens to the encoder. A two-block lightweight Transformer
+      decoder reconstructed each masked 10-s waveform from the encoded visible
+      tokens and learned mask tokens. We minimized mean squared error only
+      over masked real tokens" (Eq. 3), with :math:`\mathcal{M}` the masked
+      tokens:
+
+      .. math::
+
+         \mathcal{L}_{\mathrm{MAE}} = \frac{1}{100\, |\mathcal{M}|}
+         \sum_{n \in \mathcal{M}} \lVert \hat{x}_n - x_n \rVert_2^2.
+
+    - **Token masking.** Invalid tokens are excluded as keys and zeroed at
+      the output, as the authors' ``key_padding_mask``; ``ch_mask`` adds
+      padded channels to them (``pool="channel_temporal_mean"``).
+    - **Adaptation strategies** (Sec. III-D): linear probe (LP), MLP probe
+      (one 64-unit GELU layer), LoRA ("rank-8 updates with :math:`\alpha` =
+      16 in the attention and feed-forward linear layers"), full fine-tuning
+      (Full-FT), and the same architecture from random initialization
+      (Scratch-FT). Only the linear head is built here.
+
+    .. rubric:: Variants
+
+    The paper pretrains three token durations (Sec. V-B, Table 4; LOSO
+    macro-F1, %, each downstream example 10 s, temporal-mean readout); only
+    the 10-s weights are released.
+
+    =============  ==================  ============  ===========  =============  ===================
+    Token length   ``window_samples``  Gunther 2014  Shader 2021  SujinBak 2019  Weights
+    =============  ==================  ============  ===========  =============  ===================
+    2 s            20                  78.0          36.6         62.3           not released
+    5 s            50                  82.0          43.1         65.0           not released
+    10 s           100                 87.3          44.5         67.9           ``mtrenirs_10s.pt``
+    =============  ==================  ============  ===========  =============  ===================
+
+    .. rubric:: Pretrained Weights
+
+    ``mtrenirs_10s.pt`` of `microsoft/MtReNIRS
+    <https://github.com/microsoft/MtReNIRS>`_ (commit 16c3082, MIT), the
+    paper's epoch-95 checkpoint of the 10-s model pretrained on the 12
+    datasets of Sec. III-A, is mirrored unchanged at
+    `braindecode/mtrenirs-pretrained
+    <https://huggingface.co/braindecode/mtrenirs-pretrained>`_. It holds the
+    inference encoder only (``{"config", "model"}``; decoder and optimizer
+    removed). :meth:`load_state_dict` takes this payload strictly with the
+    authors' key names (no ``mapping``); the only new keys,
+    ``final_layer.weight`` and ``final_layer.bias``, keep their
+    initialization. It expects 10 Hz HbO/HbR, preprocessed as in Notes, in
+    100-sample windows, with positions on 10-05 slots:
+
+    .. code-block:: python
+
+        import torch
+        from huggingface_hub import hf_hub_download
+
+        from braindecode.models import MtReNIRS
+
+        path = hf_hub_download(
+            "braindecode/mtrenirs-pretrained",
+            "mtrenirs_10s.pt",
+            revision="bbc68ce5e00a4515081d900227fc06d111858e75",
+        )
+        payload = torch.load(path, map_location="cpu", weights_only=True)
+        # raw: MNE Raw with the 10-05 slot positions in loc[:3]
+        model = MtReNIRS(chs_info=raw.info["chs"], n_outputs=3, n_times=100, sfreq=10.0)
+        model.load_state_dict(payload)
+
+    .. rubric:: Differences from the reference implementation
+
+    - Input is a ``(batch, n_chans, n_times)`` tensor with the montage in
+      ``chs_info``, as the reference's ``MtReNIRS.embed`` with ``ch_types``
+      and ``ch_pos_1005`` bound in ``from_pretrained``; the reference returns
+      features only. ``final_layer`` and ``pool="channel_temporal_mean"``
+      (for ``ch_mask``) are added.
+    - :math:`q_c` is read from ``chs_info`` as given; the reference's
+      ``from_mne_raw`` also snaps it to the nearest 10-05 slot
+      (``mtrenirs.alignment.align``) and runs the preprocessing, which stays
+      outside this class.
+    - A window with a NaN sample is left out of the attention and of the
+      ``"temporal_mean"`` average (an addition); channels without a location
+      are left out as in the reference.
+    - ``on_non_divisible="crop"``/``"pad"`` are the reference's
+      ``remainder="drop"``/``"pad"``; its ``"overlap"`` is not offered.
+    - Parity: on the released checkpoint, the encoder features equal the
+      authors' ``MtReNIRSEncoder`` (MtReNIRS@16c3082) with max-abs difference
+      0.0, with all channels located and with NaN or all-zero locations.
+
+    .. versionadded:: 2.1
 
     `License <https://github.com/microsoft/MtReNIRS/blob/main/LICENSE.txt>`_
 
     Parameters
     ----------
     window_samples : int, default=100
-        Samples per token window :math:`x_{c,t}` (10 s at 10 Hz); ``data.t_win``.
+        Samples :math:`P` per token window :math:`x_{c,t}`; the paper's
+        "10-s (100-sample) windows" at 10 Hz (20 and 50 for the 2-s and 5-s
+        variants). Authors' config ``data.t_win``.
     embed_dim : int, default=128
-        Token and Transformer width; ``model.d_model``.
+        Token and Transformer width :math:`D`, the paper's "128-dimensional
+        state" (:math:`z_{c,t} \in \mathbb{R}^{128}`); ``model.d_model``.
     depth : int, default=6
-        Transformer blocks; ``model.encoder.depth``.
+        Number of Transformer blocks, "six pre-layer-normalized Transformer
+        blocks"; ``model.encoder.depth``.
     num_heads : int, default=4
-        Attention heads, with an even ``embed_dim // num_heads`` for RoPE;
-        ``model.encoder.n_heads``.
+        Attention heads :math:`H`, "four attention heads"; ``embed_dim //
+        num_heads`` must be even for RoPE. ``model.encoder.n_heads``.
     mlp_dim : int, default=512
-        Feed-forward width of each block; ``model.encoder.mlp_hidden``.
+        Hidden width of each block's feed-forward network, "a 512-dimensional
+        MLP"; ``model.encoder.mlp_hidden``.
     n_fourier_bands : int, default=6
-        Fourier bands :math:`2^k \pi`, :math:`k < 6`, per coordinate of
-        :math:`u_c` (48 features); ``model.fourier_num_bands``.
+        Fourier bands :math:`2^k \pi`, :math:`k = 0, \dots, 5`, per
+        coordinate of :math:`u_c` ("six bands of Fourier features", 48
+        features); ``model.fourier_num_bands``.
     spatial_hidden_dim : int, default=128
-        Hidden width of the 48 -> 128 -> 128 spatio-chromophore MLP;
-        ``model.spatial_mlp_hidden``.
+        Hidden width of the spatio-chromophore MLP, the middle 128 of the
+        paper's 48 -> 128 -> 128; ``model.spatial_mlp_hidden``.
     rope_base : float, default=500.0
-        RoPE base of the window index; ``model.rope_base``.
+        RoPE base :math:`\beta` of the window index, "RoPE [...] with base
+        500"; ``model.rope_base``.
     qk_norm : bool, default=True
-        Per-head LayerNorm of queries and keys; ``model.qk_norm``.
+        Per-head LayerNorm of queries and keys, "Per-head layer normalization
+        stabilized queries and keys"; ``model.qk_norm``.
     pool : {"temporal_mean", "channel_temporal_mean", "flatten"}, default="temporal_mean"
         Readout of the ``(batch, n_windows, n_chans, embed_dim)`` tokens:
-        ``"temporal_mean"``, their mean over the valid windows;
-        ``"channel_temporal_mean"``, their mean over the valid windows and
-        channels (takes ``ch_mask``); ``"flatten"``, all tokens flattened (the
-        reference's ``"flatten"``).
+        ``"temporal_mean"``, their mean over the valid windows (the paper's
+        temporal averaging); ``"channel_temporal_mean"``, their mean over the
+        valid windows and channels (takes ``ch_mask``); ``"flatten"``, all
+        tokens flattened (the reference's ``"flatten"``).
     on_non_divisible : {"crop", "pad", "error"}, default="crop"
         A short last window is dropped (the reference's ``remainder="drop"``),
         zero-padded (``"pad"``) or refused.
     coordinate_center : tuple of float
-        Centre (m) subtracted from :math:`q_c`, computed on the pretraining
-        corpus; the checkpoint's ``data.pos_center``.
+        Centre :math:`\mu` (m) subtracted from :math:`q_c`, the "one center
+        [...] computed from the pretraining corpus"; the checkpoint's
+        ``data.pos_center``.
     coordinate_scale : float
-        RMS scale (m) dividing the centred :math:`q_c`; ``data.pos_scale``.
+        RMS scale :math:`\sigma` (m) dividing the centred :math:`q_c`; the
+        checkpoint's ``data.pos_scale``.
     drop_prob : float, default=0.1
-        Dropout of attention weights, attention output and MLP;
-        ``model.encoder.dropout``.
+        Dropout of attention weights, attention output and MLP, the paper's
+        "0.1 dropout"; ``model.encoder.dropout``.
     activation : type[nn.Module], default=nn.GELU
-        Activation of the spatio-chromophore MLP and feed-forward blocks.
+        Activation of the spatio-chromophore MLP ("with GELU activation") and
+        of the feed-forward blocks.
 
     Notes
     -----
-    Protocol (paper Sec. III): MBLL (PPF 6.0), "band-pass filtered each run
-    from 0.01 to 0.5 Hz, resampled to 10 Hz", per-channel z-score over the run,
-    clip to :math:`[-6, 6]`, windows [onset, onset + 10 s). Pretraining: 12
-    datasets (268 subjects, 567 h), 60-s crops, 25 % of tokens masked, AdamW,
-    100 epochs, batch 128, lr :math:`2 \times 10^{-4}`; epoch 95 selected on
-    the validation loss. Evaluation on SujinBak 2019 :footcite:`bak2019ufft`
-    (30 subjects, 3 classes): LOSO with ~15 % inner-validation subjects, 50
-    epochs, AdamW lr :math:`10^{-4}`, batch 32, best validation macro-F1; LP,
-    MLP (64 units), LoRA (r 8, :math:`\alpha` 16), Full-FT, Scratch-FT; and
-    2-8-shot linear probes (200 full-batch updates, 50 draws per subject).
+    Preprocessing (Sec. III-B, Fig. 2A): S-D pairs 8-35 mm apart; optical
+    density, scalp-coupling index below 0.5 marked, temporal derivative
+    distribution repair, modified Beer-Lambert law with a partial pathlength
+    factor of 6.0 (skipped for HbO/HbR releases); "We then band-pass filtered
+    each run from 0.01 to 0.5 Hz, resampled to 10 Hz, and removed flat or
+    abnormally low-variance chromophore channels"; z-score of each
+    chromophore channel over its run, clip to :math:`[-6, 6]`; downstream
+    windows "[onset, onset + 10 s) without a hemodynamic-response shift".
 
-    The band-pass must remove content above 0.5 Hz: the released
-    ``from_mne_raw`` uses MNE's default FIR (0.87 of the amplitude passes at
-    1 Hz), which gives 61.1 (LOSO LP) and 35.1 (2-shot) instead of 68.3 and
-    40.3. A zero-phase Butterworth reproduces the paper (:gh:`1564`):
+    Pretraining (Sec. III-A, III-C): 12 datasets, 268 subject entries, 1,389
+    runs, over 567 h, 203,420 non-overlapping 10-s windows, subject-disjoint
+    80/20 split; each sample a uniformly drawn dataset and run, a 60-s crop of
+    six windows, at most 256 chromophore channels (1,536 tokens); 25 % of
+    tokens masked; AdamW, 100 epochs, batch 128, weight decay 0.01, peak
+    learning rate :math:`2 \times 10^{-4}`, 10 % linear warm-up then cosine
+    decay; the epoch-95 checkpoint has the lowest validation loss.
+
+    Evaluation (Sec. III-D, III-E) on three held-out datasets, among them
+    SujinBak 2019 :footcite:`bak2019ufft` (30 subjects, left-hand, right-hand
+    and foot tapping, 2,250 10-s samples). Benchmark 1, LOSO: about 15 % of
+    the other subjects for inner validation, 50 epochs, AdamW, learning rate
+    :math:`10^{-4}` with cosine annealing, weight decay :math:`10^{-4}`,
+    batch 32, the state with the best validation macro-F1 tested once.
+    Benchmark 2, within-subject few-shot: :math:`N \in \{2, 4, 6, 8\}`
+    examples per class, 50 draws, tested on the subject's other examples; the
+    linear probe gets 200 full-batch updates on cached frozen features.
+    Metric: macro-F1, mean and population SD over subjects.
+
+    The band-pass must remove content above 0.5 Hz. The released
+    ``from_mne_raw`` calls MNE's default FIR ``filter(0.01, 0.5)``, which
+    passes 0.87 of the amplitude at 1 Hz and leaves 43.8 % of the window
+    power above 0.5 Hz (1.1 % with a zero-phase Butterworth); with it the
+    LOSO linear probe gives 61.1 and the 2-shot probe 35.1 instead of 68.3
+    and 40.3 (:gh:`1564`). A zero-phase Butterworth reproduces the paper:
     ``raw.filter(0.01, 0.5, method="iir", iir_params=dict(order=3, ftype="butter"))``.
 
-    Replication with this port and ``mtrenirs_10s.pt`` (macro-F1, %; LP/MLP
-    3 seeds, others 1; channels on their nearest 10-05 slots around C3/C4;
-    the authors' encoder gives identical features):
+    Replication on SujinBak 2019 with this port and ``mtrenirs_10s.pt``
+    (macro-F1, %), under the paper's protocol: 4 of the 29 training subjects
+    for inner validation; few-shot head learning rate :math:`10^{-4}`; LP and
+    MLP 3 seeds (LP 68.8 / 67.4 / 68.8, MLP 67.7 / 67.0 / 67.4), the others 1;
+    channels on their nearest 10-05 slots around C3/C4. The authors' encoder
+    gives the port's features exactly (max-abs difference 0.0) on these
+    windows.
 
     =========  =====  ====  ====  =======  ==========  ======  ======  ======  ======
     \          LP     MLP   LoRA  Full-FT  Scratch-FT  2-shot  4-shot  6-shot  8-shot
     =========  =====  ====  ====  =======  ==========  ======  ======  ======  ======
     Paper      67.9   67.2  70.3  70.2     66.7        40.4    46.2    50.0    53.0
+    Paper SD   17.7   18.6  18.6  19.1     16.2        8.1     11.9    14.2    15.1
     Port       68.3   67.4  69.3  69.6     67.8        40.3    46.6    50.4    53.0
+    Rel. diff  +0.6   +0.2  -1.5  -0.8     +1.6        -0.2    +0.9    +0.9    -0.0
     =========  =====  ====  ====  =======  ==========  ======  ======  ======  ======
+
+    The relative difference is in % of the paper value.
 
     References
     ----------
