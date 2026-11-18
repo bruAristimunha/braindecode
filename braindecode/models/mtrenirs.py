@@ -456,13 +456,15 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
 
     def __init__(
         self,
+        # Braindecode parameters
         n_outputs: int | None = None,
         n_chans: int | None = None,
-        chs_info=None,
+        chs_info: list[dict] | None = None,
         n_times: int | None = None,
         input_window_seconds: float | None = None,
         sfreq: float | None = None,
         *,
+        # Model-specific parameters
         window_samples: int = 100,
         embed_dim: int = 128,
         depth: int = 6,
@@ -494,31 +496,74 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
             sfreq=sfreq,
         )
         del n_outputs, n_chans, chs_info, n_times, input_window_seconds, sfreq
+
+        # Checkers
+        # RoPE rotates pairs of features of each head, so every head needs an
+        # even number of features.
         if embed_dim % num_heads or (embed_dim // num_heads) % 2:
             raise ValueError(
                 f"embed_dim ({embed_dim}) must be divisible by num_heads "
                 f"({num_heads}) with an even head_dim for rotary position "
                 "embeddings."
             )
+        # The readout is one of the three the paper's heads use; any other
+        # name has no defined feature size.
         pools = ("temporal_mean", "channel_temporal_mean", "flatten")
         if pool not in pools:
             raise ValueError(f"pool must be one of {pools}, got {pool!r}.")
         _check_on_non_divisible(on_non_divisible)
+
+        # Parameters
         self.window_samples = window_samples
         self.pool = pool
         self.on_non_divisible = on_non_divisible
+        # Number of temporal windows T cut from the recording
         self.n_windows = patch_count(self.n_times, window_samples, on_non_divisible)
-        self.embed = _TokenEmbedding(
-            window_samples, embed_dim, n_fourier_bands, spatial_hidden_dim, activation
-        )
+        # u_c = (x, y, z, chromophore): three standardized optode coordinates
+        # and the HbO/HbR flag
+        self.n_coordinates = 4
+        # Size of the feature vector that each readout hands to the head
+        self.feature_dim = {
+            "temporal_mean": self.n_chans * embed_dim,
+            "channel_temporal_mean": embed_dim,
+            "flatten": self.n_windows * self.n_chans * embed_dim,
+        }[pool]
         drop_prob = float(drop_prob)
+
+        # Layers
+        # Following paper nomenclature
+
+        # Token embedding: z_{c,t} = signal embedding of the window x_{c,t}
+        # plus the spatio-chromophore embedding of u_c. One token per
+        # (channel, window), so any montage is a variable-length token set.
+        self.embed = _TokenEmbedding(
+            window_samples=window_samples,
+            embed_dim=embed_dim,
+            n_coordinates=self.n_coordinates,
+            n_fourier_bands=n_fourier_bands,
+            spatial_hidden_dim=spatial_hidden_dim,
+            activation=activation,
+        )
+
+        # Transformer encoder: ``depth`` pre-norm blocks whose attention spans
+        # all channels and windows jointly, with QK-norm and a rotary embedding
+        # of the window index (the only place where time order enters).
         blocks = [
             _TransformerBlock(
-                embed_dim, num_heads, mlp_dim, drop_prob, rope_base, qk_norm, activation
+                embed_dim=embed_dim,
+                num_heads=num_heads,
+                mlp_dim=mlp_dim,
+                drop_prob=drop_prob,
+                rope_base=rope_base,
+                qk_norm=qk_norm,
+                activation=activation,
             )
             for _ in range(depth)
         ]
-        self.encoder = _Encoder(blocks, embed_dim)
+        self.encoder = _Encoder(blocks=blocks, embed_dim=embed_dim)
+
+        # u_c of the channels in chs_info, standardized with the pretraining
+        # statistics; not persistent, so a checkpoint carries no montage.
         default_coordinates = _coordinates(
             self._chs_info, coordinate_center, coordinate_scale
         )
@@ -527,6 +572,9 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
             torch.from_numpy(default_coordinates),
             persistent=False,
         )
+
+        # Shape layers of the tokenization: windows of one channel become
+        # tokens, and masks and coordinates are broadcast to the same layout.
         self.split_windows = Rearrange(
             "batch chans (windows samples) -> batch windows chans samples",
             samples=window_samples,
@@ -545,6 +593,8 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
         self.merge_coordinates = Rearrange(
             "batch windows chans coords -> batch (windows chans) coords"
         )
+
+        # Shape layers of the readout
         self.token_over_features = Rearrange("batch tokens -> batch tokens 1")
         self.valid_over_features = Rearrange(
             "batch windows chans -> batch windows chans 1"
@@ -553,11 +603,8 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
         self.flatten_tokens = Rearrange(
             "batch windows chans dim -> batch (windows chans dim)"
         )
-        self.feature_dim = {
-            "temporal_mean": self.n_chans * embed_dim,
-            "channel_temporal_mean": embed_dim,
-            "flatten": self.n_windows * self.n_chans * embed_dim,
-        }[pool]
+
+        # Classification head: one linear layer on the pooled features
         self.final_layer = nn.Linear(self.feature_dim, self.n_outputs)
 
     def encode_windows(
@@ -703,22 +750,44 @@ class _TokenEmbedding(nn.Module):
     (an MLP of the Fourier features of :math:`u_c`)."""
 
     def __init__(
-        self, window_samples, embed_dim, n_fourier_bands, spatial_hidden_dim, activation
+        self,
+        window_samples: int,
+        embed_dim: int,
+        n_coordinates: int,
+        n_fourier_bands: int,
+        spatial_hidden_dim: int,
+        activation: type[nn.Module],
     ):
         super().__init__()
-        # ``signal.proj`` and ``spatial.mlp`` are the checkpoint's key paths
+        # Parameters
+        # phi(u_c) holds a sine and a cosine for every coordinate and band
+        n_sin_cos = 2
+        fourier_dim = n_coordinates * n_fourier_bands * n_sin_cos
+
+        # Layers
+        # Signal embedding: a linear projection of the raw window x_{c,t}.
+        # ``signal.proj`` is the checkpoint's key path.
         self.signal = nn.Sequential(
             OrderedDict(proj=nn.Linear(window_samples, embed_dim))
         )
-        # 2^k pi, k = 0, ..., n_fourier_bands - 1
+
+        # Fourier frequencies 2^k pi, k = 0, ..., n_fourier_bands - 1: octave
+        # bands let the MLP resolve both coarse and fine optode distances.
         freqs = (2.0 ** torch.arange(n_fourier_bands).float()) * torch.pi
         self.register_buffer("freqs", freqs, persistent=False)
+
+        # Spatio-chromophore embedding: an MLP of the Fourier features
+        # phi(u_c), so the position and the chromophore of a channel are an
+        # input and not a learned per-channel table. ``spatial.mlp`` is the
+        # checkpoint's key path.
         mlp = nn.Sequential(
-            nn.Linear(4 * n_fourier_bands * 2, spatial_hidden_dim),
+            nn.Linear(fourier_dim, spatial_hidden_dim),
             activation(),
             nn.Linear(spatial_hidden_dim, embed_dim),
         )
         self.spatial = nn.Sequential(OrderedDict(mlp=mlp))
+
+        # Shape layers of the Fourier features
         self.coordinates_over_bands = Rearrange(
             "batch tokens coords -> batch tokens coords 1"
         )
@@ -727,22 +796,50 @@ class _TokenEmbedding(nn.Module):
         )
 
     def forward(self, signal: torch.Tensor, coordinates: torch.Tensor) -> torch.Tensor:
+        """Embed every (channel, window) token.
+
+        Parameters
+        ----------
+        signal : torch.Tensor
+            Windows :math:`x_{c,t}`, ``(batch, n_tokens, window_samples)``.
+        coordinates : torch.Tensor
+            :math:`u_c` of each token, ``(batch, n_tokens, n_coordinates)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Tokens :math:`z_{c,t}`, ``(batch, n_tokens, embed_dim)``.
+        """
+        # Fourier frequencies 2^k pi on the device and dtype of the input
+        # (n_fourier_bands,)
         freqs = self.freqs.to(device=coordinates.device, dtype=coordinates.dtype)
-        # (batch, n_tokens, 4) -> (batch, n_tokens, 4, 1)
+
+        # Angles 2^k pi u_{c,j} of every coordinate j and band k
+        # (batch, n_tokens, n_coordinates) -> (batch, n_tokens, n_coordinates, 1)
         coordinates = self.coordinates_over_bands(coordinates)
-        # -> (batch, n_tokens, 4, n_fourier_bands): 2^k pi u_{c,j}
+        # -> (batch, n_tokens, n_coordinates, n_fourier_bands)
         angles = coordinates * freqs
-        # -> (batch, n_tokens, 4 * n_fourier_bands)
+        # -> (batch, n_tokens, n_coordinates * n_fourier_bands)
         angles = self.merge_bands(angles)
+
+        # Signal embedding of the window x_{c,t}
         # (batch, n_tokens, window_samples) -> (batch, n_tokens, embed_dim)
         signal_embedding = self.signal(signal)
+
+        # Fourier features phi(u_c): all sines, then all cosines
+        # -> (batch, n_tokens, 2 * n_coordinates * n_fourier_bands)
         sine = angles.sin()
         cosine = angles.cos()
-        # -> (batch, n_tokens, 2 * 4 * n_fourier_bands): phi(u_c)
         fourier = torch.cat([sine, cosine], dim=-1)
+
+        # Spatio-chromophore embedding: MLP of phi(u_c)
         # -> (batch, n_tokens, embed_dim)
         spatial_embedding = self.spatial(fourier)
-        return signal_embedding + spatial_embedding
+
+        # Token z_{c,t}: the two embeddings are summed
+        # -> (batch, n_tokens, embed_dim)
+        x = signal_embedding + spatial_embedding
+        return x
 
 
 class _RotarySelfAttention(TimmAttention):
