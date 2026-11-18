@@ -7498,12 +7498,15 @@ def test_jung_mae_reset_head_initializes_as_the_constructor():
     assert not model.final_layer.bias.any()
 
 
-def test_fnirs_foundation_models_non_divisible_windows_follow_the_reference():
-    """GeoNIRS and JungMAE refuse a partial patch and MtReNIRS drops a
-    partial window, as their references do."""
-    for model_cls in (GeoNIRS, JungMAE):
-        with pytest.raises(ValueError, match="not divisible"):
-            model_cls(chs_info=_fnirs_chs_info(2), n_outputs=2, n_times=155)
+@pytest.mark.parametrize("model_cls", [GeoNIRS, JungMAE])
+def test_fnirs_patch_models_refuse_a_partial_patch(model_cls):
+    """A window that is not a whole number of patches raises, as in the reference."""
+    with pytest.raises(ValueError, match="not divisible"):
+        model_cls(chs_info=_fnirs_chs_info(2), n_outputs=2, n_times=155)
+
+
+def test_mtrenirs_drops_a_partial_window():
+    """MtReNIRS drops a partial window, as its reference does."""
     model = MtReNIRS(chs_info=_fnirs_chs_info(2), n_outputs=2, n_times=150, depth=1)
     assert model.n_windows == 1
     x = torch.randn(1, 4, 150)
@@ -7560,10 +7563,13 @@ def test_fnirs_foundation_models_head_and_reset(model_cls):
     assert model.final_layer.weight.dtype == torch.float64
 
 
-def test_fnirs_foundation_models_need_their_channel_information():
-    for model_cls in (GeoNIRS, JungMAE):
-        with pytest.raises(ValueError, match="n_chans must be even"):
-            model_cls(n_chans=5, n_outputs=2, n_times=60)
+@pytest.mark.parametrize("model_cls", [GeoNIRS, JungMAE])
+def test_fnirs_pair_models_need_an_even_n_chans(model_cls):
+    with pytest.raises(ValueError, match="n_chans must be even"):
+        model_cls(n_chans=5, n_outputs=2, n_times=60)
+
+
+def test_geonirs_needs_its_channel_geometry():
     with pytest.raises(ValueError, match="needs the channel geometry"):
         GeoNIRS(n_chans=4, n_outputs=2, n_times=60)(torch.randn(1, 4, 60))
     loc_none = [{"ch_name": f"S1_D1 {k}", "loc": None} for k in ("hbo", "hbr")]
@@ -7571,6 +7577,9 @@ def test_fnirs_foundation_models_need_their_channel_information():
         GeoNIRS(chs_info=loc_none, n_outputs=2, n_times=60)(torch.randn(1, 2, 60))
     with pytest.raises(ValueError, match="different channel counts"):
         GeoNIRS(chs_info=_fnirs_chs_info(2), n_outputs=2, n_times=60)(torch.randn(1, 2, 60))
+
+
+def test_mtrenirs_needs_its_channel_positions():
     with pytest.raises(ValueError, match="needs channel positions"):
         MtReNIRS(n_chans=4, n_outputs=2, n_times=100)(torch.randn(1, 4, 100))
     no_loc = [{"ch_name": f"S1_D1 {k}"} for k in ("hbo", "hbr")]
@@ -7672,60 +7681,26 @@ def test_mtrenirs_chromophores_and_valid_window_pooling():
 
 
 _FNIRS_WEIGHTS = os.environ.get("BRAINDECODE_FNIRS_WEIGHTS", "")
-# The MIT-licensed MtReNIRS checkpoint, as released, on the Hub (pinned revision)
-_FNIRS_HUB = {
-    "mtrenirs_10s.pt": (
-        "braindecode/mtrenirs-pretrained",
-        "bbc68ce5e00a4515081d900227fc06d111858e75",
-    ),
-}
-
-
-def _fnirs_checkpoint(file):
-    """``file`` from ``BRAINDECODE_FNIRS_WEIGHTS``, else from the Hub."""
+def _fnirs_checkpoint(file, hub=None):
+    """``file`` from ``BRAINDECODE_FNIRS_WEIGHTS``, else from the Hub repo and
+    revision ``hub``."""
     path = os.path.join(_FNIRS_WEIGHTS, file)
     if _FNIRS_WEIGHTS and os.path.isfile(path):
         return path
-    if file not in _FNIRS_HUB:
+    if hub is None:
         pytest.skip(f"{file} not in BRAINDECODE_FNIRS_WEIGHTS")
-    hub = pytest.importorskip("huggingface_hub")
-    repo_id, revision = _FNIRS_HUB[file]
+    hf_hub = pytest.importorskip("huggingface_hub")
+    repo_id, revision = hub
     try:
-        return hub.hf_hub_download(repo_id, file, revision=revision)
-    except hub.utils.LocalEntryNotFoundError as err:  # offline
+        return hf_hub.hf_hub_download(repo_id, file, revision=revision)
+    except hf_hub.utils.LocalEntryNotFoundError as err:  # offline
         pytest.skip(f"Hugging Face Hub not reachable: {err}")
 
 
-# features[:, :4] of the authors' code (GeoNIRS 81f8995, MtReNIRS 16c3082) on
-# the input below, computed in Voyager Job bd-fix1564-probe-11150236
-@pytest.mark.parametrize(
-    "file,cls,kwargs,expected",
-    [
-        ("geonirs_base.pt", GeoNIRS, {"n_times": 150, "sfreq": 5.0},
-         [[0.02500118874013424, 0.04738733917474747, 0.007597371935844421, 0.005497157108038664],
-          [-0.12108907848596573, 0.2241547405719757, -0.18274709582328796, -0.03251400962471962]]),
-        ("geonirs_large.pt", GeoNIRS, {"n_times": 150, "sfreq": 5.0,
-                                       "embed_dim": 384, "num_heads": 12,
-                                       "depth": 6, "feature_dim": 128},
-         [[-3.8912150859832764, -0.606697678565979, -0.19837510585784912, -6.412940979003906],
-          [-5.242615699768066, -2.4871740341186523, -0.46112173795700073, -3.506788730621338]]),
-        pytest.param(
-            "mtrenirs_10s.pt", MtReNIRS, {"n_times": 100, "sfreq": 10.0},
-            [[1.3799299001693726, 1.1365183591842651, 1.0999616384506226, 0.12654231488704681],
-             [-0.03779871016740799, -0.9599133729934692, 0.5302731394767761, 0.7867113351821899]],
-            marks=pytest.mark.huggingface,
-        ),
-        ("jung_mae.pt", JungMAE, {"n_times": 150, "sfreq": 5.0},
-         [[0.0012979282764717937, -0.39332136511802673, 0.23441119492053986, 0.3510328233242035],
-          [-0.34959089756011963, -0.3680170476436615, 0.44219091534614563, 0.24921967089176178]]),
-    ],
-)
-def test_fnirs_released_checkpoints_match_the_authors_code(file, cls, kwargs, expected):
-    """The official checkpoints (``BRAINDECODE_FNIRS_WEIGHTS``; MtReNIRS also
-    from the Hub), as released (decoders included), load strictly with
+def _check_released_fnirs_checkpoint(path, cls, kwargs, expected):
+    """The checkpoint, as released (decoders included), loads strictly with
     ``weights_only=True``, every backbone tensor is the checkpoint's, and the
-    features are the authors'."""
-    path = _fnirs_checkpoint(file)
+    first features equal ``expected``, the authors' code on the same input."""
     payload = torch.load(path, map_location="cpu", weights_only=True)
     model = cls(chs_info=_fnirs_chs_info(10), n_outputs=2, **kwargs).eval()
     model.load_state_dict(payload, strict=True)
@@ -7737,6 +7712,52 @@ def test_fnirs_released_checkpoints_match_the_authors_code(file, cls, kwargs, ex
     with torch.no_grad():
         features = model(x, return_features=True)["features"]
     torch.testing.assert_close(features[:, :4], torch.tensor(expected), rtol=0, atol=1e-5)
+
+
+# features[:, :4] of the authors' code on the input of
+# _check_released_fnirs_checkpoint, computed in Voyager Job bd-fix1564-probe-11150236
+
+
+@pytest.mark.parametrize(
+    "file, kwargs, expected",
+    [
+        ("geonirs_base.pt", {"n_times": 150, "sfreq": 5.0},
+         [[0.02500118874013424, 0.04738733917474747, 0.007597371935844421, 0.005497157108038664],
+          [-0.12108907848596573, 0.2241547405719757, -0.18274709582328796, -0.03251400962471962]]),
+        ("geonirs_large.pt", {"n_times": 150, "sfreq": 5.0, "embed_dim": 384,
+                              "num_heads": 12, "depth": 6, "feature_dim": 128},
+         [[-3.8912150859832764, -0.606697678565979, -0.19837510585784912, -6.412940979003906],
+          [-5.242615699768066, -2.4871740341186523, -0.46112173795700073, -3.506788730621338]]),
+    ],
+)
+def test_geonirs_released_checkpoints_match_the_authors_code(file, kwargs, expected):
+    """GeoNIRS@81f8995 checkpoints, from ``BRAINDECODE_FNIRS_WEIGHTS``."""
+    _check_released_fnirs_checkpoint(_fnirs_checkpoint(file), GeoNIRS, kwargs, expected)
+
+
+@pytest.mark.huggingface
+def test_mtrenirs_released_checkpoint_matches_the_authors_code():
+    """The MIT-licensed MtReNIRS@16c3082 checkpoint, as released, on the Hub
+    (pinned revision)."""
+    hub = ("braindecode/mtrenirs-pretrained", "bbc68ce5e00a4515081d900227fc06d111858e75")
+    expected = [
+        [1.3799299001693726, 1.1365183591842651, 1.0999616384506226, 0.12654231488704681],
+        [-0.03779871016740799, -0.9599133729934692, 0.5302731394767761, 0.7867113351821899],
+    ]
+    path = _fnirs_checkpoint("mtrenirs_10s.pt", hub)
+    _check_released_fnirs_checkpoint(
+        path, MtReNIRS, {"n_times": 100, "sfreq": 10.0}, expected
+    )
+
+
+def test_jung_mae_released_checkpoint_matches_the_authors_code():
+    """The released ``jung_mae.pt`` (81f8995), from ``BRAINDECODE_FNIRS_WEIGHTS``."""
+    expected = [
+        [0.0012979282764717937, -0.39332136511802673, 0.23441119492053986, 0.3510328233242035],
+        [-0.34959089756011963, -0.3680170476436615, 0.44219091534614563, 0.24921967089176178],
+    ]
+    path = _fnirs_checkpoint("jung_mae.pt")
+    _check_released_fnirs_checkpoint(path, JungMAE, {"n_times": 150, "sfreq": 5.0}, expected)
 
 
 def _tccnet_reference(model, x, mask_value):
