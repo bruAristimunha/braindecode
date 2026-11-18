@@ -7769,20 +7769,12 @@ def test_mtrenirs_chromophores_and_valid_window_pooling():
 _FNIRS_WEIGHTS = os.environ.get("BRAINDECODE_FNIRS_WEIGHTS", "")
 
 
-def _fnirs_checkpoint(file, hub=None):
-    """``file`` from ``BRAINDECODE_FNIRS_WEIGHTS``, else from the Hub repo and
-    revision ``hub``."""
+def _fnirs_checkpoint(file):
+    """``file`` from ``BRAINDECODE_FNIRS_WEIGHTS``; the test is skipped without it."""
     path = os.path.join(_FNIRS_WEIGHTS, file)
-    if _FNIRS_WEIGHTS and os.path.isfile(path):
-        return path
-    if hub is None:
+    if not (_FNIRS_WEIGHTS and os.path.isfile(path)):
         pytest.skip(f"{file} not in BRAINDECODE_FNIRS_WEIGHTS")
-    hf_hub = pytest.importorskip("huggingface_hub")
-    repo_id, revision = hub
-    try:
-        return hf_hub.hf_hub_download(repo_id, file, revision=revision)
-    except hf_hub.utils.LocalEntryNotFoundError as err:  # offline
-        pytest.skip(f"Hugging Face Hub not reachable: {err}")
+    return path
 
 
 def _check_released_fnirs_checkpoint(path, cls, kwargs, expected):
@@ -7833,7 +7825,13 @@ def test_mtrenirs_released_checkpoint_matches_the_authors_code():
         [1.3799299001693726, 1.1365183591842651, 1.0999616384506226, 0.12654231488704681],
         [-0.03779871016740799, -0.9599133729934692, 0.5302731394767761, 0.7867113351821899],
     ]
-    path = _fnirs_checkpoint("mtrenirs_10s.pt", hub)
+    path = os.path.join(_FNIRS_WEIGHTS, "mtrenirs_10s.pt")
+    if not (_FNIRS_WEIGHTS and os.path.isfile(path)):
+        hf_hub = pytest.importorskip("huggingface_hub")
+        try:
+            path = hf_hub.hf_hub_download(hub[0], "mtrenirs_10s.pt", revision=hub[1])
+        except hf_hub.utils.LocalEntryNotFoundError as err:  # offline
+            pytest.skip(f"Hugging Face Hub not reachable: {err}")
     _check_released_fnirs_checkpoint(
         path, MtReNIRS, {"n_times": 100, "sfreq": 10.0}, expected
     )
