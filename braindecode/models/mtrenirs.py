@@ -30,7 +30,7 @@ from braindecode.models.util import (
     extract_channel_locations_from_chs_info,
     fnirs_chromophores_from_chs_info,
 )
-from braindecode.modules import FeedForwardBlock, TimmAttention
+from braindecode.modules import FeedForwardBlock
 
 
 class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
@@ -842,57 +842,125 @@ class _TokenEmbedding(nn.Module):
         return x
 
 
-class _RotarySelfAttention(TimmAttention):
-    """The authors' ``MultiHeadAttention``: timm attention with per-head QK
-    LayerNorm, a rotary embedding of the window index and a key padding mask.
+class _RotarySelfAttention(nn.Module):
+    """The authors' ``MultiHeadAttention``: per-head QK LayerNorm, a rotary
+    embedding of the window index and a key padding mask.
 
-    Private because :class:`~braindecode.modules.TimmAttention`'s forward takes
-    neither per-token positions nor a mask; its ``qkv``/``proj`` are reused.
+    Private because the attention of :mod:`braindecode.modules` takes neither
+    per-token positions nor a mask; ``qkv`` and ``proj`` keep timm's names, as
+    in the released ``mtrenirs_10s.pt``.
     """
 
-    def __init__(self, embed_dim, num_heads, drop_prob, rope_base, qk_norm):
-        super().__init__(embed_dim, num_heads, qkv_bias=True, attn_drop=drop_prob)
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        drop_prob: float,
+        rope_base: float,
+        qk_norm: bool,
+    ):
+        super().__init__()
+        # Parameters
+        self.head_dim = embed_dim // num_heads
         self.rope_base = float(rope_base)
+        # Query, key and value come out of one fused projection
+        n_projections = 3
+
+        # Layers
+        # Fused query/key/value projection of every token
+        self.qkv = nn.Linear(embed_dim, n_projections * embed_dim, bias=True)
+        # Dropout on the attention weights
+        self.attn_drop = nn.Dropout(drop_prob)
+        # Output projection that mixes the heads back to the token width
+        self.proj = nn.Linear(embed_dim, embed_dim)
+        # QK-norm: a LayerNorm on each head's queries and keys bounds the
+        # attention logits, which keeps pretraining stable.
         self.q_norm = nn.LayerNorm(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = nn.LayerNorm(self.head_dim) if qk_norm else nn.Identity()
+
+        # Shape layers
+        self.split_heads = Rearrange(
+            "batch tokens (qkv heads dim) -> qkv batch heads tokens dim",
+            qkv=n_projections,
+            heads=num_heads,
+        )
         self.angles_over_heads = Rearrange("batch tokens dim -> batch 1 tokens dim")
         self.keys_over_queries = Rearrange("batch tokens -> batch 1 1 tokens")
         self.merge_heads = Rearrange(
             "batch heads tokens dim -> batch tokens (heads dim)"
         )
 
-    # takes positions and valid, unlike timm's forward: mypy's override check is off
-    def forward(  # type: ignore[override]
-        self, values: torch.Tensor, positions: torch.Tensor, valid: torch.Tensor
+    def forward(
+        self, x: torch.Tensor, positions: torch.Tensor, valid: torch.Tensor
     ) -> torch.Tensor:
-        # (batch, n_tokens, embed_dim) -> 3 x (batch, heads, n_tokens, head_dim)
-        query, key, value = self._heads(values)
+        """Self-attention over all (channel, window) tokens.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Tokens, ``(batch, n_tokens, embed_dim)``.
+        positions : torch.Tensor
+            Window index :math:`t` of each token, ``(batch, n_tokens)``.
+        valid : torch.Tensor
+            ``True`` for tokens that can be attended, ``(batch, n_tokens)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Attended tokens, ``(batch, n_tokens, embed_dim)``.
+        """
+        # Fused projection, then one query, key and value per head
+        # (batch, n_tokens, embed_dim) -> (batch, n_tokens, 3 * embed_dim)
+        qkv = self.qkv(x)
+        # -> 3 x (batch, heads, n_tokens, head_dim)
+        query, key, value = self.split_heads(qkv).unbind(0)
+
+        # QK-norm: LayerNorm of the queries and keys of each head
+        # (batch, heads, n_tokens, head_dim), unchanged
         query = self.q_norm(query)
         key = self.k_norm(key)
+
+        # RoPE frequencies base^(-2i / head_dim) of the feature pairs
         # (head_dim // 2,)
         inv_freq = rotary_frequencies(
             self.head_dim, self.rope_base, positions.device, query.dtype
         )
-        positions = positions.to(query.dtype)
+        # RoPE angles t * frequency: the position of a token is its window
+        # index t, so channels of one window share a rotation
         # (batch, n_tokens) -> (batch, n_tokens, head_dim)
+        positions = positions.to(query.dtype)
         angles = rotary_angles(positions, inv_freq, interleaved=False)
         cosine = angles.cos()
         sine = angles.sin()
         # (batch, n_tokens, head_dim) -> (batch, 1, n_tokens, head_dim)
         cosine = self.angles_over_heads(cosine)
         sine = self.angles_over_heads(sine)
+
+        # Rotate queries and keys (not values): their dot product then
+        # depends only on the difference of the two window indices
+        # (batch, heads, n_tokens, head_dim), unchanged
         query = apply_rotary(query, cosine, sine, interleaved=False)
         key = apply_rotary(key, cosine, sine, interleaved=False)
-        # (batch, n_tokens): a sample with no valid token attends to all of them
+
+        # Key padding mask: invalid tokens (NaN window, channel without a
+        # location, padded channel) are never attended. A sample with no valid
+        # token attends to all of them, so its softmax stays finite.
+        # (batch, n_tokens) -> (batch, 1)
         any_valid = valid.any(dim=-1, keepdim=True)
+        # (batch, n_tokens)
         attend = valid | ~any_valid
         # (batch, n_tokens) -> (batch, 1, 1, n_tokens)
         attend = self.keys_over_queries(attend)
+        # Additive bias: 0 for attended keys, -inf for blocked ones
+        # (batch, 1, 1, n_tokens)
         bias = torch.zeros_like(attend, dtype=query.dtype)
         blocked = ~attend
         bias = bias.masked_fill(blocked, float("-inf"))
+
+        # Scaled dot-product attention, softmax(q k^T / sqrt(head_dim) + bias) v
+        # (batch, heads, n_tokens, head_dim)
         dropout_p = self.attn_drop.p if self.training else 0.0
-        output = scaled_dot_product_attention(
+        x = scaled_dot_product_attention(
             query,
             key,
             value,
@@ -900,9 +968,12 @@ class _RotarySelfAttention(TimmAttention):
             dropout_p=dropout_p,
             scale=1.0 / math.sqrt(self.head_dim),
         )
+
+        # Concatenate the heads and project back to the token width
         # (batch, heads, n_tokens, head_dim) -> (batch, n_tokens, embed_dim)
-        output = self.merge_heads(output)
-        return self.proj(output)
+        x = self.merge_heads(x)
+        x = self.proj(x)
+        return x
 
 
 class _TransformerBlock(nn.Module):
@@ -914,30 +985,71 @@ class _TransformerBlock(nn.Module):
     """
 
     def __init__(
-        self, embed_dim, num_heads, mlp_dim, drop_prob, rope_base, qk_norm, activation
+        self,
+        embed_dim: int,
+        num_heads: int,
+        mlp_dim: int,
+        drop_prob: float,
+        rope_base: float,
+        qk_norm: bool,
+        activation: type[nn.Module],
     ):
         super().__init__()
+        # Pre-norm of the attention sub-layer
         self.norm1 = nn.LayerNorm(embed_dim)
+        # Joint spatio-temporal self-attention with QK-norm and RoPE
         self.attn = _RotarySelfAttention(
-            embed_dim, num_heads, drop_prob, rope_base, qk_norm
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            drop_prob=drop_prob,
+            rope_base=rope_base,
+            qk_norm=qk_norm,
         )
+        # Pre-norm of the feed-forward sub-layer
         self.norm2 = nn.LayerNorm(embed_dim)
+        # Feed-forward network: embed_dim -> mlp_dim -> embed_dim
         self.mlp = FeedForwardBlock(
-            embed_dim, 1, drop_prob, activation, hidden_features=mlp_dim
+            emb_size=embed_dim,
+            expansion=1,
+            drop_p=drop_prob,
+            activation=activation,
+            hidden_features=mlp_dim,
         )
+        # Dropout on the attention branch before the residual sum
         self.drop = nn.Dropout(drop_prob)
 
     def forward(
-        self, values: torch.Tensor, positions: torch.Tensor, valid: torch.Tensor
+        self, x: torch.Tensor, positions: torch.Tensor, valid: torch.Tensor
     ) -> torch.Tensor:
-        # (batch, n_tokens, embed_dim) -> (batch, n_tokens, embed_dim)
-        normed = self.norm1(values)
-        attended = self.attn(normed, positions, valid)
+        """One pre-norm Transformer block.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Tokens, ``(batch, n_tokens, embed_dim)``.
+        positions : torch.Tensor
+            Window index of each token, ``(batch, n_tokens)``.
+        valid : torch.Tensor
+            ``True`` for tokens that can be attended, ``(batch, n_tokens)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Tokens, ``(batch, n_tokens, embed_dim)``.
+        """
+        # Attention sub-layer: x + Dropout(Attention(LayerNorm(x)))
+        # (batch, n_tokens, embed_dim), unchanged
+        attended = self.norm1(x)
+        attended = self.attn(attended, positions, valid)
         attended = self.drop(attended)
-        values = values + attended
-        normed = self.norm2(values)
-        update = self.mlp(normed)
-        return values + update
+        x = x + attended
+
+        # Feed-forward sub-layer: x + MLP(LayerNorm(x))
+        # (batch, n_tokens, embed_dim), unchanged
+        update = self.norm2(x)
+        update = self.mlp(update)
+        x = x + update
+        return x
 
 
 class _Encoder(nn.Module):
@@ -945,16 +1057,40 @@ class _Encoder(nn.Module):
 
     def __init__(self, blocks: list[nn.Module], embed_dim: int):
         super().__init__()
+        # The stack of pre-norm Transformer blocks
         self.blocks = nn.ModuleList(blocks)
+        # Final LayerNorm: pre-norm blocks leave the residual stream
+        # unnormalized, so the tokens are normalized once before the readout.
         self.norm = nn.LayerNorm(embed_dim)
 
     def forward(
-        self, values: torch.Tensor, positions: torch.Tensor, valid: torch.Tensor
+        self, x: torch.Tensor, positions: torch.Tensor, valid: torch.Tensor
     ) -> torch.Tensor:
-        # (batch, n_tokens, embed_dim) -> (batch, n_tokens, embed_dim)
+        """Encode the tokens.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Tokens :math:`z_{c,t}`, ``(batch, n_tokens, embed_dim)``.
+        positions : torch.Tensor
+            Window index of each token, ``(batch, n_tokens)``.
+        valid : torch.Tensor
+            ``True`` for tokens that can be attended, ``(batch, n_tokens)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Encoded tokens, ``(batch, n_tokens, embed_dim)``.
+        """
+        # Transformer blocks, each attending over all channels and windows
+        # (batch, n_tokens, embed_dim), unchanged
         for block in self.blocks:
-            values = block(values, positions, valid)
-        return self.norm(values)
+            x = block(x, positions, valid)
+
+        # Final LayerNorm of the encoded tokens
+        # (batch, n_tokens, embed_dim), unchanged
+        x = self.norm(x)
+        return x
 
 
 def _coordinates(chs_info, coordinate_center, coordinate_scale) -> np.ndarray:
