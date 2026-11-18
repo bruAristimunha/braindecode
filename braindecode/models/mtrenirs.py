@@ -613,12 +613,33 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
         coordinates: Optional[torch.Tensor] = None,
         ch_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """``(batch, n_chans, n_times)`` -> tokens ``(batch, n_windows, n_chans,
-        embed_dim)`` and their validity ``(batch, n_windows, n_chans)``.
-        ``coordinates`` is ``(n_chans, 4)`` or ``(batch, n_chans, 4)``
-        (:math:`u_c`, positions already standardized); NaN positions mark
-        channels without a location."""
+        """Tokenize the recording and encode its (channel, window) tokens.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Hemoglobin concentrations, ``(batch, n_chans, n_times)``. A NaN
+            sample masks its window.
+        coordinates : torch.Tensor or None
+            :math:`u_c` of the channels of ``x``, ``(n_chans, 4)`` or
+            ``(batch, n_chans, 4)``: standardized position and chromophore
+            (0 HbO, 1 HbR). NaN positions mark channels without a location.
+            ``None`` uses the coordinates built from ``chs_info``.
+        ch_mask : torch.Tensor or None
+            ``True`` for real channels, ``(batch, n_chans)``.
+
+        Returns
+        -------
+        encoded : torch.Tensor
+            Encoded tokens, ``(batch, n_windows, n_chans, embed_dim)``; zero
+            where a token is not valid.
+        valid : torch.Tensor
+            Validity of each token, ``(batch, n_windows, n_chans)``.
+        """
         batch_size, n_chans, _ = x.shape
+
+        # Spatio-chromophore coordinates u_c: from chs_info unless given. The
+        # model has no channel table, so it cannot run without positions.
         if coordinates is None:
             coord = self.default_coordinates
             if coord.numel() == 0:
@@ -638,57 +659,103 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
                     "coordinates and x have different channel counts: pass one "
                     "row per channel of x."
                 )
+
+        # Temporal windowing: the recording is cut into T non-overlapping
+        # windows of window_samples; a partial last window is cropped or padded
         # (batch, n_chans, n_times) -> (batch, n_chans, n_windows * window_samples)
         x = pad_or_crop_to_patches(x, self.window_samples, self.on_non_divisible)
-        # -> (batch, n_windows, n_chans, window_samples): x_{c,t}
+        # Windows x_{c,t}, one per channel c and window t
+        # -> (batch, n_windows, n_chans, window_samples)
         windows = self.split_windows(x)
         n_windows = windows.shape[1]
+
+        # Validity of each window: a NaN sample (missing or bad segment) masks
+        # the whole window
+        # (batch, n_windows, n_chans, window_samples)
         finite = torch.isfinite(windows)
-        # (batch, n_windows, n_chans): a NaN masks its window
+        # -> (batch, n_windows, n_chans)
         valid = finite.all(dim=-1)
-        coord = coord.to(device=x.device, dtype=windows.dtype)
+
+        # u_c for every sample of the batch
         # (n_chans, 4) or (batch, n_chans, 4) -> (batch, n_chans, 4)
+        coord = coord.to(device=x.device, dtype=windows.dtype)
         coord = coord.expand(batch_size, -1, -1)
+
+        # A channel without a location (NaN position) is masked; its u_c is
+        # set to 0 so that the Fourier features stay finite
+        # (batch, n_chans, 3)
         positions = coord[..., :3]
         positions_finite = torch.isfinite(positions)
-        # (batch, n_chans): a channel without a location is masked, at position 0
+        # -> (batch, n_chans)
         located = positions_finite.all(dim=-1)
+        # -> (batch, n_chans, 1)
         located_over_coordinates = self.chan_over_coordinates(located)
         coord_zeros = torch.zeros_like(coord)
+        # (batch, n_chans, 4)
         coord = torch.where(located_over_coordinates, coord, coord_zeros)
         # (batch, n_chans) -> (batch, 1, n_chans)
         located_over_windows = self.chan_over_windows(located)
+        # (batch, n_windows, n_chans)
         valid = valid & located_over_windows
+
+        # Padded channels of a batch that mixes montages are masked too
         if ch_mask is not None:
+            # (batch, n_chans) -> (batch, 1, n_chans)
             ch_mask = self.chan_over_windows(ch_mask)
             ch_mask = ch_mask.to(torch.bool)
+            # (batch, n_windows, n_chans)
             valid = valid & ch_mask
+
+        # Token set: every (window, channel) pair is one token, windows first
         # (batch, n_windows, n_chans) -> (batch, n_windows * n_chans)
         valid_tokens = self.merge_token_mask(valid)
+        # NaN samples are replaced by 0 so that masked tokens stay finite
+        # (batch, n_windows, n_chans, window_samples)
         window_zeros = torch.zeros_like(windows)
-        tokens = torch.where(finite, windows, window_zeros)
-        # (batch, n_windows, n_chans, window_samples) -> (batch, n_windows * n_chans, window_samples)
-        tokens = self.merge_tokens(tokens)
-        # (batch, n_chans, 4) -> (batch, n_windows * n_chans, 4): u_c of every token
+        x = torch.where(finite, windows, window_zeros)
+        # -> (batch, n_windows * n_chans, window_samples)
+        x = self.merge_tokens(x)
+
+        # u_c of every token: a channel keeps its coordinates in all windows
+        # (batch, n_chans, 4) -> (batch, 1, n_chans, 4)
         coord_tokens = self.coordinates_over_windows(coord)
+        # -> (batch, n_windows, n_chans, 4)
         coord_tokens = coord_tokens.expand(-1, n_windows, -1, -1)
+        # -> (batch, n_windows * n_chans, 4)
         coord_tokens = self.merge_coordinates(coord_tokens)
-        # (batch, n_windows * n_chans): the RoPE position of a token is its window t
+
+        # RoPE position of a token: its window index t, shared by all channels
+        # (n_windows,) -> (n_windows * n_chans,)
         window_indices = torch.arange(n_windows, device=x.device)
         window_indices = window_indices.repeat_interleave(n_chans)
+        # -> (batch, n_windows * n_chans)
         window_indices = window_indices.expand(batch_size, -1)
-        # -> (batch, n_windows * n_chans, embed_dim): z_{c,t}
-        embedded = self.embed(tokens, coord_tokens)
-        encoded = self.encoder(embedded, window_indices, valid_tokens)
+
+        # Token embedding z_{c,t}: signal embedding of x_{c,t} plus the
+        # spatio-chromophore embedding of u_c
+        # (batch, n_windows * n_chans, window_samples)
+        # -> (batch, n_windows * n_chans, embed_dim)
+        x = self.embed(x, coord_tokens)
+
+        # Transformer encoder: joint attention over channels and windows,
+        # invalid tokens are never attended
+        # (batch, n_windows * n_chans, embed_dim), unchanged
+        x = self.encoder(x, window_indices, valid_tokens)
+
+        # Invalid tokens are zeroed so that they cannot reach the readout
+        # (batch, n_windows * n_chans) -> (batch, n_windows * n_chans, 1)
         token_weight = self.token_over_features(valid_tokens)
-        token_weight = token_weight.to(encoded.dtype)
-        encoded = encoded * token_weight
+        token_weight = token_weight.to(x.dtype)
         # (batch, n_windows * n_chans, embed_dim)
+        x = x * token_weight
+
+        # Back to the (window, channel) grid for the readout
         # -> (batch, n_windows, n_chans, embed_dim)
-        encoded = encoded.unflatten(1, [n_windows, n_chans])
-        return encoded, valid
+        x = x.unflatten(1, [n_windows, n_chans])
+        return x, valid
 
     def reset_head(self, n_outputs: int) -> None:
+        """Replace the classification head with a new one of ``n_outputs``."""
         self._set_n_outputs(n_outputs)
         self.final_layer = nn.Linear(self.feature_dim, n_outputs)
 
@@ -707,42 +774,78 @@ class MtReNIRS(EEGModuleMixin, nn.Module, license="mit"):
         coordinates: Optional[torch.Tensor] = None,
         ch_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor | dict[str, torch.Tensor | None]:
-        """``(batch, n_chans, n_times)`` -> ``(batch, n_outputs)``.
+        """Forward pass.
 
-        ``coordinates`` as in :meth:`encode_windows`. ``ch_mask``
-        ``(batch, n_chans)`` (:func:`~braindecode.functional.check_ch_mask`)
-        needs ``pool="channel_temporal_mean"``; padded channels are left out of
-        the attention and the pooling.
+        Parameters
+        ----------
+        x : torch.Tensor
+            Hemoglobin concentrations, ``(batch, n_chans, n_times)``.
+        return_features : bool, default=False
+            Return the pooled features instead of the logits.
+        coordinates : torch.Tensor or None
+            :math:`u_c` of the channels of ``x``, as in :meth:`encode_windows`.
+        ch_mask : torch.Tensor or None
+            ``True`` for real channels, ``(batch, n_chans)``
+            (:func:`~braindecode.functional.check_ch_mask`). Needs
+            ``pool="channel_temporal_mean"``; padded channels are left out of
+            the attention and the pooling.
+
+        Returns
+        -------
+        torch.Tensor or dict
+            Logits ``(batch, n_outputs)``, or with ``return_features`` a dict
+            with ``features`` ``(batch, feature_dim)`` and ``cls_token``
+            (``None``: the model has no class token).
         """
+        # A channel mask only makes sense when the readout averages over
+        # channels: the other two keep one feature slot per channel.
         ch_mask = check_ch_mask(ch_mask, x)
         if ch_mask is not None and self.pool != "channel_temporal_mean":
             raise ValueError(
                 "ch_mask needs pool='channel_temporal_mean': the other heads "
                 "are tied to the channels."
             )
+
+        # Tokenization, token embedding z_{c,t} and Transformer encoder
         # (batch, n_chans, n_times) -> (batch, n_windows, n_chans, embed_dim)
-        encoded, valid = self.encode_windows(x, coordinates, ch_mask)
+        # valid: (batch, n_windows, n_chans)
+        x, valid = self.encode_windows(x, coordinates, ch_mask)
+
+        # Readout of the encoded tokens
         if self.pool == "flatten":
+            # All tokens are kept and concatenated
             # -> (batch, n_windows * n_chans * embed_dim)
-            features = self.flatten_tokens(encoded)
+            x = self.flatten_tokens(x)
         else:
-            # mean over the valid windows (and channels)
+            # Mean over the valid windows ("temporal_mean", one vector per
+            # channel) or over the valid windows and channels
+            # ("channel_temporal_mean", one vector per recording)
             dims: List[int] = [1] if self.pool == "temporal_mean" else [1, 2]
             # (batch, n_windows, n_chans) -> (batch, n_windows, n_chans, 1)
             weight = self.valid_over_features(valid)
-            weight = weight.to(encoded.dtype)
+            weight = weight.to(x.dtype)
+            # Number of valid tokens averaged; at least 1, so a channel with
+            # no valid window gives zeros and not NaN
+            # -> (batch, n_chans, 1) or (batch, 1)
             count = weight.sum(dim=dims)
             count = count.clamp_min(1.0)
-            weighted = encoded * weight
-            total = weighted.sum(dim=dims)
+            # Sum of the valid tokens
             # -> (batch, n_chans, embed_dim) or (batch, embed_dim)
-            features = total / count
+            x = x * weight
+            x = x.sum(dim=dims)
+            x = x / count
             if self.pool == "temporal_mean":
+                # The per-channel vectors are concatenated
                 # (batch, n_chans, embed_dim) -> (batch, n_chans * embed_dim)
-                features = self.flatten_channels(features)
+                x = self.flatten_channels(x)
+
         if return_features:
-            return {"features": features, "cls_token": None}
-        return self.final_layer(features)
+            return {"features": x, "cls_token": None}
+
+        # Classification head
+        # (batch, feature_dim) -> (batch, n_outputs)
+        x = self.final_layer(x)
+        return x
 
 
 class _TokenEmbedding(nn.Module):
