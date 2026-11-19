@@ -722,7 +722,8 @@ Code health
   publication. The monthly build also checks the tested master commit and
   four pinned pretrained checkpoints. Development versions follow master
   commit order, and stable tag selection excludes prereleases and scratch tags.
-
+- Trial-prediction and estimator compiler tests share their synthetic windows.
+  The chunk and aggregation tests use the same historical reconstruction reference.
 - Documentation built from a release tag uses https://braindecode.org/stable/
   for the canonical, Open Graph and JSON-LD URLs and in ``llms.txt``, which
   only calls ``/dev/`` builds a moving development snapshot
