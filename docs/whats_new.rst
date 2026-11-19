@@ -72,6 +72,12 @@ Enhancements
   between recording descriptions and window metadata, and recording-level subset
   selection (:gh:`1596` by `Daria Agafonova`_).
 
+- :class:`~braindecode.models.SignalJEPA`, :class:`~braindecode.models.LUNA`,
+  :class:`~braindecode.models.NeuroRVQTokenizer` and
+  :class:`~braindecode.models.TFMTokenizer` share their Intel Gaudi group
+  normalization implementation. Existing state dictionaries retain their
+  parameter names and pickles still load through the original model modules (:gh:`1642`).
+
 - :class:`braindecode.modules.ChannelLayer` maps channels with one linear
   estimate, :func:`braindecode.functional.linear_channel_map`: inputs ``A v``,
   targets ``B v``, a prior covariance of the electrode potentials ``v`` and a flat
