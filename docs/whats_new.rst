@@ -486,6 +486,9 @@ Bug fixes
   :func:`braindecode.functional.patch_count` and
   :func:`braindecode.functional.pad_or_crop_to_patches` now reject empty time
   axes, invalid patch sizes and unknown boundary policies consistently.
+- :class:`braindecode.augmentation.FTSurrogate` applies a shared phase
+  perturbation across channels on Apple MPS. Broadcasting that phase also
+  avoids copying it for each channel on other devices.
 - :class:`braindecode.models.MEGGPT` with ``on_non_divisible="pad"`` no longer
   averages kept steps that lie after the end of the input. When the last
   segment held fewer real samples than its first kept step position, those
