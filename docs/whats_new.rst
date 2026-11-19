@@ -338,6 +338,9 @@ Bug fixes
   a radian with the released ``braindecode/VEMG2Pose-emg2pose`` weights. Parameters
   are unchanged, so released weights still load (:gh:`1613` by
   `@ptlnextdoor <https://github.com/ptlnextdoor>`_).
+- :class:`braindecode.models.CORTEG` initializes its high-gamma projection
+  from the loaded low-frequency kernel when loading a bare
+  :class:`braindecode.models.STEEGFormer` backbone (:gh:`1625`).
 - :func:`braindecode.functional.derivation_matrix` now normalizes explicitly
   supplied electrode names without regard to case, including with a named
   recording reference, preventing duplicated columns and misplaced weights
