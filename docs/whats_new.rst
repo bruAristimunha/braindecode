@@ -428,6 +428,10 @@ Bug fixes
 - :class:`braindecode.models.EEGPT` rejects a learned projection whose channel
   count differs from its 19 named target embeddings at construction. Previously
   a single projected channel was broadcast across all 19 embeddings (:gh:`1624`).
+- :class:`braindecode.samplers.DistributedRelativePositioningSampler` divides
+  the requested pair count evenly across ranks, including when the recording
+  count requires padding or truncation. Uneven pair budgets round up by
+  default and down with ``drop_last=True``.
 - :class:`braindecode.models.MEGGPT` with ``on_non_divisible="pad"`` no longer
   averages kept steps that lie after the end of the input. When the last
   segment held fewer real samples than its first kept step position, those
