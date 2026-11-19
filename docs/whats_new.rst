@@ -505,6 +505,11 @@ Bug fixes
   full-model pickles retain the previous outputs. When loading a bare
   state dict, pass ``attn_query_norm=True`` to reproduce those outputs
   (:gh:`1606` by `@ptlnextdoor <https://github.com/ptlnextdoor>`_).
+- Local ``from_pretrained`` accepts a replacement window duration and loads
+  ``pytorch_model.bin`` when ``save_pretrained`` falls back to that format.
+  ``get_config`` also keeps subclass arguments, including the spatial-filter
+  count of :class:`~braindecode.models.SignalJEPA_Contextual`, without the Hub extra
+  (:gh:`1637`).
 - The Eldele et al. (2021) sleep staging tutorial (``plot_sleep_staging_eldele2021.py``) splits train and validation by subject, as its text says; ``split`` took the ids as recording indices, so it trained on subjects 0-1 and validated on subject 2 while subjects 3-5 were loaded and unused (:gh:`1559` by `Bruno Aristimunha`_).
 - :class:`braindecode.modules.ChannelMerger` keeps gradients finite when spatial
   dropout excludes every electrode of a recording during training in
