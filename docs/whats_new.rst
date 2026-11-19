@@ -675,6 +675,9 @@ Code health
   model suites. Frequency-shift device and gradient cases run alongside
   the transform's numerical tests.
 
+- Update the documentation version selector during the monthly release, so a
+  release-preparation change cannot relabel the public stable documentation
+  (:gh:`1666`).
 - ``test/unit_tests/test_version.py`` accepts release versions, so the tests
   shipped in a release sdist pass (:gh:`1534` by `Bruno Aristimunha`_).
 - The :ref:`channel-strategies` guide shows how to exclude and reconstruct a
