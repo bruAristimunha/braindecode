@@ -1,0 +1,130 @@
+name: Verify Braindecode release PRs in groups
+on:
+  push:
+    branches: [audit/verify-repaired-78-20261119]
+permissions:
+  contents: read
+env:
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  TORCHINDUCTOR_COMPILE_THREADS: '1'
+  MAX_JOBS: '1'
+  UV_TORCH_BACKEND: cpu
+  BRAINDECODE_COMPILE_ALL: '1'
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [outside-models, models-0, models-1, models-2, models-3, slow, compile-0, compile-1, compile-2, compile-3, acceptance]
+    name: ${{ matrix.group }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ca69e5ef71dec99ba537014cd2a4248e3af4f439
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+      - run: uv pip install --system -e '.[tests,moabb,hub,eegprep,typing,viz]'
+      - uses: actions/cache/restore@v4
+        if: matrix.group == 'outside-models' || matrix.group == 'acceptance'
+        with:
+          path: ~/mne_data
+          key: test-2-Linux-3.12
+      - name: Warm the real-data cache before starting workers
+        if: matrix.group == 'outside-models' || matrix.group == 'acceptance'
+        run: python -c 'from moabb.datasets import BNCI2014_001; BNCI2014_001().get_data([1, 2, 4])'
+      - name: Run the selected tests
+        env:
+          GROUP: ${{ matrix.group }}
+        shell: python
+        run: |
+          import os
+          import subprocess
+          import sys
+          group = os.environ['GROUP']
+          runner = [sys.executable, '-m', 'pytest']
+          arguments = {
+              'outside-models': ['test', '--ignore=test/unit_tests/models', '-n', '2', '--dist', 'worksteal'],
+              'slow': ['test', '-m', 'slow', '-n', '0'],
+              'acceptance': ['test/acceptance_tests', '--run-network', '-n', '0'],
+          }
+          if group.startswith(('compile-', 'models-')):
+              if group.startswith('compile-'):
+                  root = 'test/unit_tests/models/test_integration.py'
+                  match = 'test_model_compiled'
+              else:
+                  root = 'test/unit_tests/models'
+                  match = 'not test_model_compiled'
+              listing = subprocess.check_output(runner + ['--collect-only', '-q', root, '-k', match], text=True)
+              nodes = [line for line in listing.splitlines() if line.startswith(root) and '::' in line]
+              assert nodes and len(nodes) == len(set(nodes)), listing
+              number = int(group.rsplit('-', 1)[1])
+              shard = nodes[number::4]
+              assert shard
+              print(f'Running {len(shard)} of {len(nodes)} collected {match!r} cases', flush=True)
+              # Pytest expands one exact node ID per line; no shell command-line size limit.
+              with open('release-selection.txt', 'w') as selected_nodes:
+                  selected_nodes.write(''.join(node + '\n' for node in shard))
+              selected = ['-n', '0', '@release-selection.txt']
+          else:
+              selected = arguments[group]
+          sys.exit(subprocess.call(runner + ['-v', '--durations=20', '-o', 'tmp_path_retention_policy=failed', '--junitxml=release-results.xml', *selected]))
+      - name: Save pytest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-${{ matrix.group }}
+          path: |
+            release-results.xml
+            release-selection.txt
+          if-no-files-found: ignore
+  wheels:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: '3.11'
+          - os: windows-latest
+            python: '3.14'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ca69e5ef71dec99ba537014cd2a4248e3af4f439
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: ./.github/actions/check-wheel
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ca69e5ef71dec99ba537014cd2a4248e3af4f439
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+      - run: uv pip install --system -e '.[docs,moabb,hub,eegprep,typing,viz]'
+      - name: Build the API and guides
+        env:
+          BRAINDECODE_DOCS_JOBS: '1'
+          MPLBACKEND: Agg
+        run: make -C docs html SPHINXOPTS='-j 2 -D plot_gallery=0'
