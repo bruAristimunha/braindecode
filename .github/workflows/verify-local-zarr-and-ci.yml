@@ -1,0 +1,109 @@
+name: Verify local Zarr and CI dependency boundaries
+on:
+  push:
+    branches: [audit/verify-local-zarr-and-ci-20261119]
+permissions:
+  contents: read
+jobs:
+  status-and-memory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: braindecode/braindecode
+          ref: c74552ecf2c4294d84756984de7cd83851847e36
+          persist-credentials: false
+      - name: Exercise normal and signalled child exits
+        run: |
+          python - <<'PY'
+          import signal
+          import subprocess
+          import sys
+
+          wrapper = [sys.executable, ".github/scripts/with_memory_log.py", sys.executable, "-c"]
+          for code in (0, 1, 13, 71, 137, 143, 255):
+              result = subprocess.run([*wrapper, f"import sys; sys.exit({code})"])
+              print(f"exit {code} -> {result.returncode}")
+              assert result.returncode == code
+          for sig in (signal.SIGKILL, signal.SIGTERM, signal.SIGABRT):
+              result = subprocess.run([*wrapper, f"import os, resource; resource.setrlimit(resource.RLIMIT_CORE, (0, 0)); os.kill(os.getpid(), {int(sig)})"])
+              print(f"{sig.name} -> {result.returncode}")
+              assert result.returncode == 128 + sig
+          PY
+      - name: Capture actual GNU free and ps output at the first sample
+        shell: bash
+        run: |
+          set -o pipefail
+          python .github/scripts/with_memory_log.py sleep 63 | tee "$RUNNER_TEMP/process.log"
+          grep -q '::group::memory' "$RUNNER_TEMP/process.log"
+          grep -q 'Mem:' "$RUNNER_TEMP/process.log"
+          grep -q 'RSS' "$RUNNER_TEMP/process.log"
+          grep -q '::endgroup::' "$RUNNER_TEMP/process.log"
+
+  dependency-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      UV_TORCH_BACKEND: cpu
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: bruAristimunha/braindecode
+          ref: 7fc8d438951fa48c818ced650542589bc6f7175d
+          path: storage
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: bruAristimunha/braindecode
+          ref: 772b294300336895654de82f909f424d4be57320
+          path: selection
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+      - name: Install core and Zarr in a fresh environment
+        run: |
+          python -m venv "$RUNNER_TEMP/bd-verify-env"
+          echo "$RUNNER_TEMP/bd-verify-env/bin" >> "$GITHUB_PATH"
+          uv pip install --python "$RUNNER_TEMP/bd-verify-env/bin/python" -e ./storage 'pytest<9.1' 'zarr>=3.1'
+      - name: Compare exact batches through local Zarr without a Hub client
+        working-directory: storage
+        run: |
+          python -c 'import importlib.util, zarr; print("Zarr", zarr.__version__); assert importlib.util.find_spec("huggingface_hub") is None'
+          python -m pytest -q -k 'zarr or local_load' test/unit_tests/datasets/test_coalesced_reads.py test/unit_tests/datautil/test_hub_formats.py::test_zarr_round_trip_rawdataset test/unit_tests/datautil/test_hub_formats.py::test_local_load_without_zarr
+      - name: Exercise the same cases with the Hub extra
+        working-directory: storage
+        run: |
+          uv pip install --python "$RUNNER_TEMP/bd-verify-env/bin/python" -e '.[hub]'
+          python -c 'import huggingface_hub; print("Hub client", huggingface_hub.__version__)'
+          python -m pytest -q -k 'zarr or local_load' test/unit_tests/datasets/test_coalesced_reads.py test/unit_tests/datautil/test_hub_formats.py::test_zarr_round_trip_rawdataset test/unit_tests/datautil/test_hub_formats.py::test_local_load_without_zarr
+      - name: Exercise entry-point and explicit plugin isolation
+        working-directory: selection
+        run: |
+          plugin_dir="$RUNNER_TEMP/probe-plugins"
+          dist_info="$plugin_dir/selection_probe-1.0.dist-info"
+          mkdir -p "$dist_info"
+          cat > "$dist_info/METADATA" <<'META'
+          Metadata-Version: 2.1
+          Name: selection-probe
+          Version: 1.0
+          META
+          cat > "$dist_info/entry_points.txt" <<'ENTRIES'
+          [pytest11]
+          selection_probe = selection_probe
+          ENTRIES
+          cat > "$plugin_dir/selection_probe.py" <<'PY'
+          def pytest_collection_modifyitems(items):
+              if any(item.path.name == "test_marked.py" or item.name.startswith("test_recipe") for item in items):
+                  raise RuntimeError("The nested pytest session inherited an external plugin")
+          PY
+          PYTHONPATH="$plugin_dir" python -m pytest -q test/unit_tests/test_conftest_selection.py
+          PYTHONPATH="$plugin_dir" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTEST_PLUGINS=selection_probe python -m pytest -q test/unit_tests/test_conftest_selection.py
