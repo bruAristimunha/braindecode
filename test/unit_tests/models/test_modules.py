@@ -29,6 +29,7 @@ from braindecode.modules import (
     AvgPool2dWithConv,
     CausalConv1d,
     ChannelMerger,
+    ChebyshevGraphConv,
     Chomp1d,
     CombinedConv,
     DropPath,
@@ -105,6 +106,31 @@ def test_group_norm_matches_torch(shape, groups, affine, implementation):
         torch.testing.assert_close(
             norm.bias.grad, reference.bias.grad, rtol=1e-12, atol=1e-12
         )
+
+
+@pytest.mark.parametrize("order", [0, -1])
+def test_chebyshev_graph_convolution_requires_a_term(order):
+    with pytest.raises(ValueError, match="cheb_order must be at least 1"):
+        ChebyshevGraphConv(2, 3, order)
+
+
+@pytest.mark.parametrize("order", [1, 2, 4])
+def test_chebyshev_graph_convolution_filters_each_laplacian_eigenmode(order):
+    from braindecode.models.dgcnn import _GraphConvolution
+
+    assert _GraphConvolution is ChebyshevGraphConv  # historical pickle path
+    layer = ChebyshevGraphConv(2, 3, order).double()
+    x = torch.randn(2, 3, 2, dtype=torch.float64)
+    basis, _ = torch.linalg.qr(torch.randn(3, 3, dtype=torch.float64))
+    values = torch.tensor([-0.8, 0.2, 0.9], dtype=torch.float64)
+    laplacian = (basis * values) @ basis.T
+    # Each eigenmode of the kth term is scaled by T_k(s) = cos(k arccos(s)).
+    filtered = [
+        (basis * (k * values.acos()).cos()) @ basis.T @ x for k in range(order)
+    ]
+    torch.testing.assert_close(
+        layer(x, laplacian), layer.projection(torch.cat(filtered, dim=-1))
+    )
 
 
 @pytest.mark.parametrize(
