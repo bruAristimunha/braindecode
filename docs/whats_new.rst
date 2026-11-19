@@ -316,6 +316,13 @@ Bug fixes
   ``targets_from="metadata"``, the constructor default (:gh:`1610` by
   `@ptlnextdoor <https://github.com/ptlnextdoor>`_).
 
+- :class:`braindecode.models.VEMG2Pose` resamples the encoder features to the rollout
+  rate with ``align_corners=True``, as emg2pose does in ``pose_modules.py``. It used
+  ``False``, so with the same weights its outputs differed from the reference
+  implementation. Outputs of existing VEMG2Pose models change by a few thousandths of
+  a radian with the released ``braindecode/VEMG2Pose-emg2pose`` weights. Parameters
+  are unchanged, so released weights still load (:gh:`1613` by
+  `@ptlnextdoor <https://github.com/ptlnextdoor>`_).
 - :func:`braindecode.functional.derivation_matrix` now normalizes explicitly
   supplied electrode names without regard to case, including with a named
   recording reference, preventing duplicated columns and misplaced weights
