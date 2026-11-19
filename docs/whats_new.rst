@@ -445,6 +445,10 @@ Bug fixes
 - :func:`braindecode.visualization.layer_grad_cam` returns a temporal
   class activation map of shape ``(batch, n_times)`` for one-dimensional
   convolutional layers, including those of :class:`~braindecode.models.EEGSimpleConv`.
+- :class:`braindecode.modules.FilterBankLayer` preserves its float64 IIR
+  coefficients when casting a model. Narrow-band filters in
+  :class:`braindecode.models.FBCNet` could produce NaN predictions after
+  ``model.float()`` rounded the coefficients of a stable filter.
 - :class:`braindecode.models.CSBrain` no longer applies ``proj_out``, the
   pretraining reconstruction layer, to its features and classification head, as
   for :class:`braindecode.models.CBraMod`. The original fine-tuning code replaces
