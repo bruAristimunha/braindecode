@@ -59,6 +59,7 @@ from braindecode.models import (
     MVPFormer,
     NeuroRVQ,
     PopulationTransformer,
+    Pratibha2,
     SignalJEPA,
     SignalJEPA_Contextual,
     SignalJEPA_PostLocal,
@@ -297,6 +298,14 @@ COMPAT = {
         canon=TEN_TWENTY,
         channels="coords",
         coords_checked=False,
+    ),
+    # Positions by channel name; loc is not read.
+    "Pratibha2": dict(
+        cls=Pratibha2,
+        sfreq=200,
+        n_times=1000,
+        canon=TEN_TWENTY,
+        channels="names",
     ),
     "MIRepNet": dict(
         cls=MIRepNet,

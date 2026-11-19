@@ -59,7 +59,7 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(scope="session", autouse=True)
 def offline_model_geometry(request, tmp_path_factory):
-    """Supply REVE positions and the released ST-EEGFormer slot order offline."""
+    """Supply model position banks and the released ST-EEGFormer slot order offline."""
     if request.config.getoption("--run-network"):
         yield
         return
@@ -77,9 +77,9 @@ def offline_model_geometry(request, tmp_path_factory):
         montage = mne.channels.make_standard_montage(name)
         positions.update(montage.get_positions()["ch_pos"])
     folder = tmp_path_factory.mktemp("model_geometry")
-    (folder / "reve_positions.json").write_text(
-        json.dumps({name: xyz.tolist() for name, xyz in positions.items()})
-    )
+    bank = json.dumps({name: xyz.tolist() for name, xyz in positions.items()})
+    for filename in ("reve_positions.json", "pratibha2_positions.json"):
+        (folder / filename).write_text(bank)
     # The released small/base/large checkpoints and CORTEG share these slots.
     names = """
         C1 Pz C4 F6 FTT8h Oz Fp1 FCC5h TPP8h CPP6h C2 F4 OI2h AF4 FCz CCP6h TP8 POO10h FC1 FC6

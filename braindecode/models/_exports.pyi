@@ -74,6 +74,7 @@ from .neurorvq_tokenizer import NeuroRVQTokenizer as NeuroRVQTokenizer
 from .nice import NICE as NICE
 from .patchedtransformer import PBT as PBT
 from .popt import PopulationTransformer as PopulationTransformer
+from .pratibha2 import Pratibha2 as Pratibha2
 from .reve import REVE as REVE
 from .sccnet import SCCNet as SCCNet
 from .seizure_transformer import SeizureTransformer as SeizureTransformer
