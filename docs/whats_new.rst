@@ -333,6 +333,9 @@ Bug fixes
   when loading weights into a model constructed on the meta device. Existing
   state dictionaries and full-model pickles load (:gh:`1616` by
   `@ptlnextdoor <https://github.com/ptlnextdoor>`_).
+- :class:`braindecode.models.SSTDPN` can be exported with PyTorch 2.6.
+  The exported model projects each class prototype to its maximum norm
+  before computing the logits.
 - ``load_state_dict`` of every braindecode model loads checkpoints saved before
   the max-norm layers (:class:`braindecode.modules.Conv2dWithConstraint` and the
   other ``*WithConstraint`` layers) became parametrizations: their ``weight`` key
