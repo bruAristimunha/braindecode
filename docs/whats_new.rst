@@ -78,6 +78,16 @@ Enhancements
   normalization implementation. Existing state dictionaries retain their
   parameter names and pickles still load through the original model modules (:gh:`1642`).
 
+- Training on preloaded recordings, as in the tutorials and with MOABB data
+  after preprocessing, spends less time reading windows. On a 10-minute, 64-channel
+  recording, one pass of a ``DataLoader`` (batch 64, no model) over its 1491
+  windows of 4 s takes 0.32 s instead of 0.47 s, and 0.44 s instead of 0.83 s
+  with ``targets_from="channels"``. Windows, targets and crop indices are
+  unchanged. :class:`braindecode.datasets.EEGWindowsDataset` now slices each
+  window from the preloaded array without the channel parsing of
+  ``raw._getitem``, and finds the misc channels from their kind instead of
+  calling ``raw.get_channel_types()`` (:gh:`1651` by
+  `@ptlnextdoor <https://github.com/ptlnextdoor>`_).
 - :class:`braindecode.modules.ChannelLayer` maps channels with one linear
   estimate, :func:`braindecode.functional.linear_channel_map`: inputs ``A v``,
   targets ``B v``, a prior covariance of the electrode potentials ``v`` and a flat

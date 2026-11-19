@@ -996,6 +996,9 @@ class EEGWindowsDataset(_ZarrMixin, RecordDataset):
         i_window_in_trial, i_start, i_stop = crop_inds
         if self._zarr_data is not None:
             X = self._zarr_data[:, i_start:i_stop]
+        elif self.raw.preload:
+            # what raw._getitem returns, without parsing the picks on every call
+            X = self.raw._data[:, i_start:i_stop]
         else:
             X = _read_fif_window(self.raw, i_start, i_stop)
             if X is None:
@@ -1013,7 +1016,7 @@ class EEGWindowsDataset(_ZarrMixin, RecordDataset):
             y = self.y[index]
         else:
             info = self._raw.info if self._raw is not None else self._make_mne_info()
-            misc_mask = np.asarray(info.get_channel_types()) == "misc"
+            misc_mask = np.array([ch["kind"] == FIFF.FIFFV_MISC_CH for ch in info["chs"]])
             if self.last_target_only:
                 y = X[misc_mask, -1]
             else:
