@@ -455,6 +455,9 @@ Bug fixes
   than one sample. Classification, ``return_features`` and a batch of one are
   unchanged; no parameter changes, so released weights load as before
   (:gh:`1602` by `@ptlnextdoor <https://github.com/ptlnextdoor>`_).
+- :class:`braindecode.models.GeoNIRS` keeps gradients finite with
+  ``pool="mean_std"`` when a recording has one valid patch or zero variance
+  (:gh:`1622`).
 - :class:`braindecode.models.SignalJEPA` and
   :class:`braindecode.models.SignalJEPA_Contextual` no longer fail in ``backward()``
   when the window gives one token per channel (for example 152 samples at 128 Hz)
