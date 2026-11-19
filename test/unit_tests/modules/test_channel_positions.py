@@ -71,6 +71,22 @@ def test_reve_positions_can_change_channels_only_with_a_flexible_head(reve_bank)
         model(x, pos=pos)
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_reve_preserves_sensor_positions_across_dtype_casts(reve_bank, dtype):
+    names = ["Cz", "F3", "A1"]
+    model = small_reve(chs(*names)).double()
+    pos = torch.tensor([BANK[name] for name in names])
+    device = (
+        "mps" if torch.backends.mps.is_available() and dtype == torch.float16 else "cpu"
+    )
+    model.to(device=device, dtype=dtype)
+    torch.testing.assert_close(model.get_positions(names).cpu(), pos, rtol=0, atol=0)
+    model.to(device="cpu", dtype=torch.float32)
+    x = torch.randn(2, len(names), 380)
+    with torch.no_grad():
+        torch.testing.assert_close(model(x), model(x, pos=pos[None]), rtol=0, atol=0)
+
+
 def test_reve_drop_refuses_a_mask_left_without_real_channels(reve_bank):
     with pytest.warns(UserWarning, match="X1"):
         model = small_reve(chs("Cz", "X1"), on_missing="drop", attention_pooling=True)

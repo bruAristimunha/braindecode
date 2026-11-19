@@ -28,7 +28,6 @@ except ImportError:
 import copy
 
 from braindecode.datasets import (
-    BNCI2014_001,
     BaseConcatDataset,
     EEGWindowsDataset,
     RawDataset,
@@ -52,34 +51,13 @@ from braindecode.preprocessing import (
 
 
 @pytest.fixture()
-def setup_concat_windows_dataset():
-    """Create a small windowed dataset for testing.
-
-    Uses BNCI2014_001 dataset with subject_ids=[1, 2] which downloads
-    real EEG data for two subjects.
-    """
-    # Download data for subjects 1 and 2
-    dataset = BNCI2014_001(subject_ids=[1, 2])
-
-    # Use first 2 recordings to keep tests fast while testing multiple subjects
-    windowed = create_windows_from_events(
-        concat_ds=BaseConcatDataset(dataset.datasets[:2]),
-        trial_start_offset_samples=0,
-        trial_stop_offset_samples=0,
-        use_mne_epochs=True,
-    )
-    return windowed
+def setup_concat_windows_dataset(eeg_recordings):
+    return create_windows_from_events(eeg_recordings, use_mne_epochs=True)
 
 
-def test_hub_mixin_methods_exist(setup_concat_windows_dataset):
-    """Test that Hub mixin methods are available on BaseConcatDataset."""
-    dataset = setup_concat_windows_dataset
-
-    # Check that methods exist
-    assert hasattr(dataset, "push_to_hub")
-    assert hasattr(dataset, "pull_from_hub")
-    assert callable(dataset.push_to_hub)
-    assert callable(dataset.pull_from_hub)
+def test_hub_mixin_methods_exist():
+    assert callable(BaseConcatDataset.push_to_hub)
+    assert callable(BaseConcatDataset.pull_from_hub)
 
 
 def test_infer_license_from_descriptions_detects_single_license():
@@ -205,7 +183,7 @@ def test_no_lazy_imports_in_hub_module():
             ), f"{func.__name__} has circular import"
 
 
-def test_registry_pattern_works():
+def test_registry_pattern_works(setup_concat_windows_dataset):
     """Test that registry pattern allows access to dataset classes without circular imports."""
     # Get classes from registry
     WindowsDataset = get_dataset_class("WindowsDataset")
@@ -217,28 +195,19 @@ def test_registry_pattern_works():
     assert isinstance(EEGWindowsDataset, type)
     assert isinstance(BaseConcatDataset, type)
 
-    # Test get_dataset_type with actual dataset
-    dataset = BNCI2014_001(subject_ids=[1])
-    windowed = create_windows_from_events(
-        concat_ds=BaseConcatDataset([dataset.datasets[0]]),
-        trial_start_offset_samples=0,
-        trial_stop_offset_samples=0,
-        use_mne_epochs=True,
-    )
-
+    windowed = setup_concat_windows_dataset
     # Check type detection works
     assert get_dataset_type(windowed.datasets[0]) == "WindowsDataset"
     assert get_dataset_type(windowed) == "BaseConcatDataset"
 
 
-def test_eegwindows_lossless_round_trip(tmp_path):
+def test_eegwindows_lossless_round_trip(eeg_recordings, tmp_path):
     """Test that EEGWindowsDataset has lossless round-trip with continuous data preserved."""
     pytest.importorskip("zarr")
 
     # Create EEGWindowsDataset with continuous raw (use_mne_epochs=False)
-    dataset = BNCI2014_001(subject_ids=[1])
     windowed = create_windows_from_events(
-        concat_ds=BaseConcatDataset([dataset.datasets[0]]),
+        concat_ds=BaseConcatDataset([eeg_recordings.datasets[0]]),
         trial_start_offset_samples=0,
         trial_stop_offset_samples=0,
         use_mne_epochs=False,  # Creates EEGWindowsDataset
@@ -351,16 +320,13 @@ def test_rawdataset_basic_save_load(tmp_path):
     assert loaded.datasets[0].raw.ch_names == ch_names
 
 
-def test_rawdataset_lossless_round_trip(tmp_path):
+def test_rawdataset_lossless_round_trip(eeg_recordings, tmp_path):
     """Test that RawDataset has lossless round-trip with continuous data preserved."""
     pytest.importorskip("zarr")
 
-    # Use BNCI2014_001 to get real RawDataset
-    dataset = BNCI2014_001(subject_ids=[1])
-
     # Get the first recording (which is a BaseDataset wrapping a RawDataset internally)
     # We need to create a RawDataset from it
-    first_recording = dataset.datasets[0]
+    first_recording = eeg_recordings.datasets[0]
     raw_dataset = RawDataset(first_recording.raw, first_recording.description)
 
     # Create BaseConcatDataset with RawDataset
@@ -404,16 +370,13 @@ def test_rawdataset_lossless_round_trip(tmp_path):
     )
 
 
-def test_rawdataset_mixed_concat(tmp_path):
+def test_rawdataset_mixed_concat(eeg_recordings, tmp_path):
     """Test that mixed RawDataset concat works correctly."""
     pytest.importorskip("zarr")
 
-    # Use BNCI2014_001 with 2 subjects
-    dataset = BNCI2014_001(subject_ids=[1, 2])
-
     # Create RawDatasets from first 2 recordings
-    raw_ds1 = RawDataset(dataset.datasets[0].raw, dataset.datasets[0].description)
-    raw_ds2 = RawDataset(dataset.datasets[1].raw, dataset.datasets[1].description)
+    raw_ds1 = RawDataset(eeg_recordings.datasets[0].raw, eeg_recordings.datasets[0].description)
+    raw_ds2 = RawDataset(eeg_recordings.datasets[1].raw, eeg_recordings.datasets[1].description)
 
     # Create BaseConcatDataset
     concat_ds = BaseConcatDataset([raw_ds1, raw_ds2])
@@ -508,14 +471,13 @@ def test_rawdataset_format_info():
     assert format_info["total_size_mb"] > 0
 
 
-def test_mixed_dataset_types_not_supported(tmp_path):
+def test_mixed_dataset_types_not_supported(eeg_recordings, tmp_path):
     """Test that mixing different dataset types raises clear error."""
     pytest.importorskip("zarr")
 
     # Create a WindowsDataset
-    dataset = BNCI2014_001(subject_ids=[1])
     windowed = create_windows_from_events(
-        concat_ds=BaseConcatDataset([dataset.datasets[0]]),
+        concat_ds=BaseConcatDataset([eeg_recordings.datasets[0]]),
         trial_start_offset_samples=0,
         trial_stop_offset_samples=0,
         use_mne_epochs=True,  # Creates WindowsDataset
@@ -523,7 +485,7 @@ def test_mixed_dataset_types_not_supported(tmp_path):
     windows_ds = windowed.datasets[0]
 
     # Create a RawDataset from same source
-    raw_ds = RawDataset(dataset.datasets[0].raw, dataset.datasets[0].description)
+    raw_ds = RawDataset(eeg_recordings.datasets[0].raw, eeg_recordings.datasets[0].description)
 
     # Mix different types in BaseConcatDataset
     mixed_concat = BaseConcatDataset([windows_ds, raw_ds])
@@ -659,13 +621,12 @@ def test_different_lengths_allowed(tmp_path):
     assert loaded.datasets[1].raw.get_data().shape[1] == 2000
 
 
-def test_lazy_loading_support(tmp_path):
+def test_lazy_loading_support(eeg_recordings, tmp_path):
     """Test that datasets can be loaded lazily with preload=False."""
     pytest.importorskip("zarr")
 
-    dataset = BNCI2014_001(subject_ids=[1])
     windowed = create_windows_from_events(
-        concat_ds=BaseConcatDataset([dataset.datasets[0]]),
+        concat_ds=BaseConcatDataset([eeg_recordings.datasets[0]]),
         trial_start_offset_samples=0,
         trial_stop_offset_samples=0,
         use_mne_epochs=True,
@@ -693,14 +654,13 @@ def test_lazy_loading_support(tmp_path):
         assert ly == ey and li == ei
 
 
-def test_preprocessing_kwargs_preserved(tmp_path):
+def test_preprocessing_kwargs_preserved(eeg_recordings, tmp_path):
     """Test that preprocessing kwargs (window_kwargs, etc.) are preserved."""
     pytest.importorskip("zarr")
 
     # Create windowed dataset with specific kwargs
-    dataset = BNCI2014_001(subject_ids=[1])
     windowed = create_windows_from_events(
-        concat_ds=BaseConcatDataset([dataset.datasets[0]]),
+        concat_ds=BaseConcatDataset([eeg_recordings.datasets[0]]),
         trial_start_offset_samples=0,
         trial_stop_offset_samples=0,
         use_mne_epochs=True,
@@ -1079,14 +1039,13 @@ def test_info_nonfinite_preflight_is_atomic(tmp_path, nonfinite, path, category)
 
 
 @pytest.mark.parametrize("use_mne_epochs", [True, False])
-def test_zarr_round_trip_parametrized(tmp_path, use_mne_epochs):
+def test_zarr_round_trip_parametrized(eeg_recordings, tmp_path, use_mne_epochs):
     """Parametrized test for WindowsDataset and EEGWindowsDataset round-trip."""
     pytest.importorskip("zarr")
 
     # Create dataset with parametrized type
-    dataset = BNCI2014_001(subject_ids=[1])
     windowed = create_windows_from_events(
-        concat_ds=BaseConcatDataset([dataset.datasets[0]]),
+        concat_ds=BaseConcatDataset([eeg_recordings.datasets[0]]),
         trial_start_offset_samples=0,
         trial_stop_offset_samples=0,
         use_mne_epochs=use_mne_epochs,
