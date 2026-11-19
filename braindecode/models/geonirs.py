@@ -586,7 +586,9 @@ class GeoNIRS(EEGModuleMixin, nn.Module):
         # Paired chromophore signals X^O and X^R of the C source-detector pairs
         # (batch, n_chans, P * S) -> 2 x (batch, n_pairs, P * S)
         if x.shape[1] % 2:
-            raise ValueError("GeoNIRS needs whole HbO/HbR pairs.")
+            raise ValueError(
+                f"GeoNIRS needs whole HbO/HbR pairs, but the input has {x.shape[1]} channels."
+            )
         hbo, hbr = fnirs_split_hbo_hbr(x, self.channel_order)
         batch_size, n_pairs, _ = hbo.shape
         pair_mask: Optional[torch.Tensor] = None

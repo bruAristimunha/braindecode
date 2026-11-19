@@ -8354,7 +8354,7 @@ def test_pbt_saved_patcher_respects_channel_and_window_boundaries(n_times):
     with torch.no_grad():
         logits = model(x[..., :n_times])
         torch.testing.assert_close(model(x), logits)
-        with pytest.raises(ValueError, match="expects 3 channels"):
+        with pytest.raises(ValueError, match="built for 3 channels but got input with 2"):
             model(x[:, :2])
         # PBT saves before 2.1 counted patches after flattening the channels.
         model.patch_signal.num_tokens = n_chans * n_times // d_input

@@ -723,7 +723,6 @@ _FOUNDATION_MODELS = set(
 )
 # Clear errors that predate check_n_chans and word the mismatch otherwise.
 _N_CHANS_ERRORS = {
-    "GeoNIRS": r"channel counts",
     "NeuroRVQ": r"Expected input shape",
     "NeuroRVQTokenizer": r"Expected input shape",
 }
