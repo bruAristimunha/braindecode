@@ -669,8 +669,8 @@ FOUNDATION = [
     if "Foundation" in row["Categorization"]
 ]
 FIXTURES = {name: sp for name, _, sp in models_mandatory_parameters}
-# Foundation models outside COMPAT that refuse a strategy: fNIRS HbO/HbR.
-STRATEGY_REFUSED = NATIVE_ONLY | {"GeoNIRS", "JungMAE", "MtReNIRS"}
+# Outside COMPAT, fNIRS HbO/HbR and TinyMyo's ordered sEMG slots are native only.
+STRATEGY_REFUSED = NATIVE_ONLY | {"GeoNIRS", "JungMAE", "MtReNIRS", "TinyMyo"}
 
 
 def _output_tensors(y):

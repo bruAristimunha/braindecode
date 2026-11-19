@@ -159,6 +159,26 @@ def test_tinymyo_requires_positive_geometry(kwargs):
         TinyMyo(**(config | kwargs))
 
 
+def test_tinymyo_native_channel_strategy_preserves_checkpoint_and_features():
+    config = dict(
+        n_chans=2, n_outputs=3, n_times=40, embed_dim=12, num_heads=2, depth=1
+    )
+    original = TinyMyo(**config).eval()
+    native = TinyMyo(**config, channel_strategy="native").eval()
+    native.load_state_dict(original.state_dict(), strict=True)
+    x = torch.randn(2, 2, 40)
+    with torch.no_grad():
+        torch.testing.assert_close(native(x), original(x), rtol=0, atol=0)
+        torch.testing.assert_close(
+            native(x, return_features=True)["features"],
+            original(x, return_features=True)["features"],
+            rtol=0,
+            atol=0,
+        )
+    with pytest.raises(ValueError, match="native"):
+        TinyMyo(**config, channel_strategy_kwargs={"power": 2})
+
+
 # Logits of the authors' TinyMyo (BioFoundation@d4484fe) with
 # EPN612/EPN_finetune_5sec.safetensors on the input below.
 _EPN612_LOGITS = [

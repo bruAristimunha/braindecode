@@ -186,6 +186,11 @@ class TinyMyo(EEGModuleMixin, nn.Module, license="apache-2.0"):
     on_non_divisible : {"pad", "crop", "error"}, default="pad"
         How :class:`~braindecode.modules.PatchTokenizer` treats a time axis
         that is not a multiple of ``patch_size``.
+    channel_strategy : str, default="native"
+        Only ``"native"`` is supported. The pretrained encoder and classifier
+        use surface EMG electrode slots in their recorded order.
+    channel_strategy_kwargs : dict or None, default=None
+        Leave empty for the native electrode slots.
 
     References
     ----------
@@ -215,7 +220,14 @@ class TinyMyo(EEGModuleMixin, nn.Module, license="apache-2.0"):
         activation: type[nn.Module] = nn.GELU,
         norm_layer: type[nn.Module] = nn.LayerNorm,
         on_non_divisible: Literal["pad", "crop", "error"] = "pad",
+        channel_strategy: str = "native",
+        channel_strategy_kwargs: dict | None = None,
     ) -> None:
+        if channel_strategy != "native" or channel_strategy_kwargs:
+            raise ValueError(
+                "TinyMyo uses ordered surface EMG electrode slots. Only "
+                "channel_strategy='native' with no strategy options is supported."
+            )
         super().__init__(
             n_outputs=n_outputs,
             n_chans=n_chans,
