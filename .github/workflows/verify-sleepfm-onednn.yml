@@ -38,8 +38,9 @@ jobs:
         with:
           enable-cache: false
       - name: Install the CPU wheel used on master
+        id: install
         working-directory: candidate
-        run: uv pip install --system -e '.[tests,hub]' 'torch==2.15.0' 'torchaudio==2.15.0'
+        run: uv pip install --system -e '.[tests,hub]' 'torch==2.15.0' 'torchaudio==2.11.1'
       - name: Record the real Linux backend and reproduce the failure on master
         working-directory: baseline
         run: |
@@ -58,7 +59,7 @@ jobs:
           fi
           grep -i 'primitive descriptor for the LSTM forward propagation primitive' "$RUNNER_TEMP/baseline.log" || { tail -45 "$RUNNER_TEMP/baseline.log"; exit 1; }
       - name: Run the masked optimizer test on the exact PR commit
-        if: success() || failure()
+        if: "!cancelled() && steps.install.outcome == 'success'"
         working-directory: candidate
         run: |
           git rev-parse HEAD
