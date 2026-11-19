@@ -439,6 +439,10 @@ Bug fixes
   the requested pair count evenly across ranks, including when the recording
   count requires padding or truncation. Uneven pair budgets round up by
   default and down with ``drop_last=True``.
+- :class:`braindecode.modules.PatchTokenizer`,
+  :func:`braindecode.functional.patch_count` and
+  :func:`braindecode.functional.pad_or_crop_to_patches` now reject empty time
+  axes, invalid patch sizes and unknown boundary policies consistently.
 - :class:`braindecode.models.MEGGPT` with ``on_non_divisible="pad"`` no longer
   averages kept steps that lie after the end of the input. When the last
   segment held fewer real samples than its first kept step position, those
