@@ -422,6 +422,9 @@ Bug fixes
   construction. Settings where the two sizes agree, such as the defaults,
   keep their parameter shapes and outputs (:gh:`1611` by
   `@ptlnextdoor <https://github.com/ptlnextdoor>`_).
+- :class:`braindecode.models.EEGPT` rejects a learned projection whose channel
+  count differs from its 19 named target embeddings at construction. Previously
+  a single projected channel was broadcast across all 19 embeddings (:gh:`1624`).
 - :class:`braindecode.models.MEGGPT` with ``on_non_divisible="pad"`` no longer
   averages kept steps that lie after the end of the input. When the last
   segment held fewer real samples than its first kept step position, those
