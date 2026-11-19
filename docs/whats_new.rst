@@ -306,6 +306,14 @@ Bug fixes
   ``targets_from="channels"`` now raise a ``ValueError`` when the selected
   channels hold no ``misc`` channel, also when a saved dataset is loaded.
   Before, they returned an empty ``y`` (:gh:`1609` by
+- :meth:`braindecode.datasets.BaseConcatDataset.save` now saves a recording
+  created with the default ``description=None`` and writes an empty description
+  for it. Before, it raised an ``AttributeError`` after it had written the signal
+  file, which left a subdirectory that
+  :func:`braindecode.datautil.load_concat_dataset` could not read. Directly
+  constructed windows keep ``targets_from`` and ``last_target_only`` after
+  saving and loading. Older stores without these settings load with
+  ``targets_from="metadata"``, the constructor default (:gh:`1610` by
   `@ptlnextdoor <https://github.com/ptlnextdoor>`_).
 
 - :func:`braindecode.functional.derivation_matrix` now normalizes explicitly
