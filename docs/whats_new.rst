@@ -533,6 +533,9 @@ Bug fixes
 - Pydantic model configs accept MNE's integer FIFF channel kinds and preserve
   channel locations through JSON in a core installation without ``numpydantic``
   (:gh:`1632`).
+- :func:`braindecode.visualization.compute_metrics` and
+  :func:`~braindecode.visualization.compute_ssim_metrics` score nonconstant
+  signed references when positive and negative values sum to zero.
 - Fix the PyTorch forum and TensorFlow references of
   :class:`braindecode.modules.MaxNormLinear`: each URL was split across two
   docstring lines, so the rendered links pointed to a truncated forum URL (404)
