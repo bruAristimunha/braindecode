@@ -321,6 +321,8 @@ Bug fixes
 - Annotation preprocessors preserve existing event sample numbers in undated
   recordings with a nonzero first sample, including after cropping a recording.
 
+- ``convert_to_zarr`` and ``load_from_zarr`` work with a local Zarr installation.
+  Uploading or downloading a dataset also requires ``huggingface_hub``.
 - :func:`braindecode.preprocessing.filterbank` preserves channel positions and
   their coordinate frame in the filtered channels (:gh:`1580` by `sixty-66`_).
 
