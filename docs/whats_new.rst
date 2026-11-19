@@ -351,6 +351,9 @@ Bug fixes
   this change still load. Outputs of existing PBT models change when ``n_times`` is
   not a multiple of ``d_input`` and stay the same otherwise (:gh:`1612` by
   `@ptlnextdoor <https://github.com/ptlnextdoor>`_).
+- :meth:`braindecode.models.MetaNeuromotorHand.compute_output_lengths` returns
+  zero valid CTC emissions for recordings shorter than the model's receptive
+  field, including those just one sample short (by `Bruno Aristimunha`_).
 
 - :class:`braindecode.modules.ChannelLayer` computes every target that is a
   combination of the measured channels exactly, under every strategy including
