@@ -397,6 +397,11 @@ Bug fixes
   :func:`braindecode.visualization.amplitude_gradients_per_trial`, including
   the old seed and minibatch scaling, and the lifetime of each model yielded
   by :func:`~braindecode.visualization.cascading_layer_reset`.
+- Lazy Zarr datasets now return the channels and samples selected by
+  :func:`braindecode.preprocessing.preprocess`. Spawned data loaders preserve
+  edits to the recording and can return channel positions before preprocessing.
+  Raw-backed and Epochs-backed windows refresh their electrode positions after
+  an in-place channel selection or reordering during preprocessing.
 - :class:`braindecode.models.BIOT` looks up all its channel tokens in one embedding call with a
   1-D index, instead of one call per channel with a 0-d index. Outputs and gradients are
   bitwise the same on CPU. On Intel Gaudi, whose embedding backward sends a 0-d index's
