@@ -98,6 +98,7 @@ from .tcn import TCN as TCN
 from .tfm_tokenizer import TFMTokenizer as TFMTokenizer
 from .tfm_tokenizer import TFMTokenizerOutput as TFMTokenizerOutput
 from .tidnet import TIDNet as TIDNet
+from .tinymyo import TinyMyo as TinyMyo
 from .tmsanet import TMSANet as TMSANet
 from .tsinception import TSception as TSception
 from .usleep import USleep as USleep
