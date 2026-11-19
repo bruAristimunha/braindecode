@@ -14,6 +14,7 @@ from .brainmodule import BrainModule as BrainModule
 from .brainomni import BrainOmni as BrainOmni
 from .brainomni import BrainTokenizer as BrainTokenizer
 from .brant import Brant as Brant
+from .caresleepnet import CareSleepNet as CareSleepNet
 from .cbramod import CBraMod as CBraMod
 from .codebrain import CodeBrain as CodeBrain
 from .contrawr import ContraWR as ContraWR
