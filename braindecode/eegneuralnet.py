@@ -9,6 +9,7 @@ import abc
 import inspect
 import logging
 import warnings
+from copy import deepcopy
 from typing import Any, Literal
 
 import mne
@@ -58,6 +59,9 @@ class _EEGNeuralNet(NeuralNet, abc.ABC):
         kwargs = self.get_params_for("module")
         module = _get_model(self.module)
         module = self.initialized_instance(module, kwargs)
+        if module is self.module and hasattr(module, "_fit_training_data"):
+            # Keep the constructor argument reusable by fresh fits and sklearn.clone.
+            module = deepcopy(module)
         # pylint: disable=attribute-defined-outside-init
         self.module_ = module
         return self
@@ -130,6 +134,12 @@ class _EEGNeuralNet(NeuralNet, abc.ABC):
             (valid_name, valid_scoring, named_by_user),
         ]
         return train_valid_callbacks
+
+    def on_epoch_begin(self, net, dataset_train=None, dataset_valid=None, **kwargs):
+        super().on_epoch_begin(net, dataset_train, dataset_valid, **kwargs)
+        fit_training_data = getattr(self.module_, "_fit_training_data", None)
+        if fit_training_data is not None:
+            fit_training_data(dataset_train)
 
     def on_batch_end(self, net, *batch, training=False, **kwargs):
         # If training is false, assume that our loader has indices for this
@@ -244,11 +254,6 @@ class _EEGNeuralNet(NeuralNet, abc.ABC):
             classes = getattr(self, "classes", None)
         signal_kwargs = infer_signal_properties(X, y, mode=self.mode, classes=classes)
         module = _get_model(self.module)
-        # Model-specific values computed from the data (e.g. GCNsNet's graph);
-        # the signal properties take precedence.
-        infer_model_kwargs = getattr(module, "_infer_model_kwargs", None)
-        if infer_model_kwargs is not None:
-            signal_kwargs = {**infer_model_kwargs(X, y), **signal_kwargs}
         if not signal_kwargs:
             return
 
