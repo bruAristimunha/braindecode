@@ -1,0 +1,68 @@
+name: Verify the SleepFM oneDNN regression
+on:
+  push:
+    branches: [audit/verify-sleepfm-onednn-20261119]
+permissions:
+  contents: read
+jobs:
+  selected:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      OMP_NUM_THREADS: "2"
+      UV_TORCH_BACKEND: cpu
+      ONEDNN_MAX_CPU_ISA: AVX2
+      DNNL_MAX_CPU_ISA: AVX2
+      ONEDNN_VERBOSE: "1"
+      NODE: test/unit_tests/models/test_foundation_models.py::test_sleepfm_masked_training_with_autocast[SleepFMStager]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: braindecode/braindecode
+          ref: 74fd3d3aa1fac01ad46d0a7288007a2f99c209d0
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: braindecode/braindecode
+          ref: efc966a58e786b09af4655e9dbbfe6d2ddc42a98
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+      - name: Install the CPU wheel used on master
+        working-directory: candidate
+        run: uv pip install --system -e '.[tests,hub]' 'torch==2.15.0' 'torchaudio==2.15.0'
+      - name: Record the real Linux backend and reproduce the failure on master
+        working-directory: baseline
+        run: |
+          git rev-parse HEAD
+          python - <<'PY'
+          import platform
+          from pathlib import Path
+          import braindecode, torch
+          assert platform.system() == "Linux" and torch.backends.mkldnn.is_available()
+          assert Path(braindecode.__file__).resolve().is_relative_to(Path.cwd())
+          print(torch.__version__, torch.__config__.show())
+          PY
+          if python -m pytest -s -q "$NODE" > "$RUNNER_TEMP/baseline.log" 2>&1; then
+            echo "::error::Expected the master regression under AVX2."
+            exit 1
+          fi
+          grep -i 'primitive descriptor for the LSTM forward propagation primitive' "$RUNNER_TEMP/baseline.log" || { tail -45 "$RUNNER_TEMP/baseline.log"; exit 1; }
+      - name: Run the masked optimizer test on the exact PR commit
+        if: success() || failure()
+        working-directory: candidate
+        run: |
+          git rev-parse HEAD
+          python -c 'import braindecode; from pathlib import Path; assert Path(braindecode.__file__).resolve().is_relative_to(Path.cwd())'
+          python -m pytest -s -q "$NODE" | tee "$RUNNER_TEMP/candidate.log"
+          grep -E '1 passed' "$RUNNER_TEMP/candidate.log"
+          grep -Ei 'onednn_verbose.*rnn|dnnl_verbose.*rnn' "$RUNNER_TEMP/candidate.log"
