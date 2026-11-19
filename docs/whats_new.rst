@@ -72,12 +72,6 @@ Enhancements
   between recording descriptions and window metadata, and recording-level subset
   selection (:gh:`1596` by `Daria Agafonova`_).
 
-- :class:`~braindecode.models.SignalJEPA`, :class:`~braindecode.models.LUNA`,
-  :class:`~braindecode.models.NeuroRVQTokenizer` and
-  :class:`~braindecode.models.TFMTokenizer` share their Intel Gaudi group
-  normalization implementation. Existing state dictionaries retain their
-  parameter names and pickles still load through the original model modules (:gh:`1642`).
-
 - Training on preloaded recordings, as in the tutorials and with MOABB data
   after preprocessing, spends less time reading windows. On a 10-minute, 64-channel
   recording, one pass of a ``DataLoader`` (batch 64, no model) over its 1491
@@ -159,6 +153,11 @@ Enhancements
   same outputs and gradients, 28-38% less time forward and backward at CBraMod and
   LaBraM shapes on CPU and Apple MPS, and 17-44% shorter training steps of these models
   on Intel Gaudi2 (:gh:`1575` by `Bruno Aristimunha`_).
+- :class:`~braindecode.models.SignalJEPA`, :class:`~braindecode.models.LUNA`,
+  :class:`~braindecode.models.NeuroRVQTokenizer` and
+  :class:`~braindecode.models.TFMTokenizer` share their Intel Gaudi group
+  normalization implementation. Existing state dictionaries retain their
+  parameter names and pickles still load through the original model modules (:gh:`1642`).
 - :class:`braindecode.models.BIOT` returns its transformer tokens under
   ``"tokens"`` with ``return_features=True``, ``(batch, n_chans, n_patches,
   emb_size)`` and zero for padded channels, like CBraMod and LaBraM; they could
